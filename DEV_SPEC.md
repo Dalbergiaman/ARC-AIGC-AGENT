@@ -17,8 +17,9 @@
 | 前端 | TypeScript + Next.js (App Router) |
 | 后端 | Python + FastAPI |
 | Agent 框架 | LangGraph |
-| 对话模型 | GPT-4o / Claude 3.5 Sonnet（支持视觉理解） |
-| 图像生成 | 云端 API：阿里云百炼（Qwen）/ 火山引擎豆包 / OpenRouter |
+| MCP 框架 | FastMCP（`mcp.server.fastmcp`，官方 mcp 库内置） |
+| 对话模型 | 百炼（Qwen3-VL）/ 火山引擎豆包 VLM，Dashboard 可切换，支持视觉理解 |
+| 图像生成 | 云端 API：阿里云百炼（万相）/ 火山引擎（即梦）/ OpenRouter |
 | 数据库 | PostgreSQL + SQLAlchemy |
 | LangGraph Checkpointer | PostgreSQL（langgraph-checkpoint-postgres） |
 | 任务队列 | Celery + Redis |
@@ -57,7 +58,7 @@ aigc_agent/
 ├── DEV_SPEC.md                         # 本文件
 ├── docker-compose.yml
 ├── image-rag-mcp/                      # 独立 MCP 服务（stdio 通信）
-│   ├── server.py                       # MCP stdio 入口
+│   ├── server.py                       # FastMCP stdio 入口（from mcp.server.fastmcp import FastMCP）
 │   ├── tools/
 │   │   ├── store.py                    # store_generated_image 工具
 │   │   ├── search.py                   # search_by_text / search_by_image 工具
@@ -84,8 +85,8 @@ aigc_agent/
 │   │   ├── gallery/
 │   │   │   └── ResultGallery.tsx
 │   │   └── dashboard/
-│   │       ├── ModelSelector.tsx       # 对话模型选择
-│   │       ├── ImageProviderConfig.tsx # 图像生成平台配置（百炼/豆包/OpenRouter）
+│   │       ├── ModelSelector.tsx       # 对话模型选择（百炼/火山引擎 VLM）
+│   │       ├── ImageProviderConfig.tsx # 图像生成平台配置（百炼万相/火山即梦/OpenRouter）
 │   │       └── ApiKeyForm.tsx          # API Key 填写与保存
 │   ├── hooks/
 │   │   ├── useChat.ts
@@ -123,8 +124,12 @@ aigc_agent/
     │       └── prompt_templates.py     # 纯数据文件：风格关键词库，被 style_lookup/prompt_builder 引用
     ├── core/
     │   ├── llm/
-    │   │   ├── client.py
-    │   │   └── streaming.py
+    │   │   ├── base.py                 # 抽象基类 LLMClientBase
+    │   │   ├── factory.py              # LLMClientFactory（bailian / volcengine）
+    │   │   ├── bailian_client.py       # 百炼 VLM 客户端（Qwen3-VL 等）
+    │   │   ├── volcengine_client.py    # 火山引擎豆包 VLM 客户端
+    │   │   ├── client.py               # 调度器，从 dashboard_config 读取当前模型
+    │   │   └── streaming.py            # SSE 流式输出处理
     │   └── image/
     │       ├── generator.py            # 图像生成调度器（多平台统一接口）
     │       ├── base.py                 # 抽象基类 ImageGeneratorBase + 统一数据结构
@@ -625,7 +630,8 @@ image_url       # 标量字段，直接返回预览
 - 2026-04-30：ReAct 循环边界：重试上限 3 次、工具调用总步数 25（recursion_limit）、用户中断（interrupt_before）、评估兜底返回最高分结果
 - 2026-04-30：SSE 事件协议确定 7 种事件类型；工具状态半透明展示；generate_image 解耦推送；支持 Last-Event-ID 断线重连
 - 2026-04-30：图像生成平台统一接口采用抽象工厂模式 + httpx；三平台格式差异封装在各客户端内，工具层只调用统一调度器
-- 2026-04-30：Langfuse 追踪使用 @observe 显式装饰每个节点和工具函数，入口处包最外层 Trace；Prompt 不存 Langfuse，统一放 agent/prompts.py 本地管理，版本控制走 git
+- 2026-04-30：对话模型改为 VLM，支持百炼（Qwen3-VL）和火山引擎豆包 VLM，Dashboard 可切换；LLM 层同样采用工厂模式，平台范围限定为百炼和火山引擎
+- 2026-04-30：MCP 框架选用 FastMCP（mcp.server.fastmcp，官方 mcp 库内置）
 
 ---
 
