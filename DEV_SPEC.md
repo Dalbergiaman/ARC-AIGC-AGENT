@@ -44,7 +44,7 @@ FastAPI 后端 (Python)
     └── 文件存储模块
          │
          ├── LLM（GPT-4o / Claude，视觉理解）
-         ├── 图像生成（SD / Flux.1）
+         ├── 图像生成（云端 API：百炼 / 豆包 / OpenRouter）
          └── 对象存储（本地 / MinIO / S3）
 ```
 
@@ -54,7 +54,7 @@ FastAPI 后端 (Python)
 
 ```
 aigc_agent/
-├── SPEC_DEV.md                         # 本文件
+├── DEV_SPEC.md                         # 本文件
 ├── docker-compose.yml
 ├── image-rag-mcp/                      # 独立 MCP 服务（stdio 通信）
 │   ├── server.py                       # MCP stdio 入口
@@ -132,6 +132,8 @@ aigc_agent/
     │   │   └── streaming.py
     │   └── image/
     │       ├── generator.py            # 图像生成调度器（多平台统一接口）
+    │       ├── base.py                 # 抽象基类 ImageGeneratorBase + 统一数据结构
+    │       ├── factory.py              # ImageGeneratorFactory
     │       ├── bailian_client.py       # 阿里云百炼（Qwen）客户端
     │       ├── volcengine_client.py    # 火山引擎豆包客户端
     │       └── openrouter_client.py    # OpenRouter 客户端
@@ -392,6 +394,8 @@ class ImageGenerator:
 ---
 
 ## 记忆系统设计
+
+| 层次 | 内容 | 存储位置 | 生命周期 |
 |------|------|----------|----------|
 | 短期记忆 | 对话消息历史（最近 20 条） | PostgreSQL messages 表 | 会话内 |
 | 工作记忆 | DesignState 结构化设计参数 | AgentState + sessions 表 JSON 字段 | 会话内，持久化 |
@@ -468,6 +472,10 @@ Prompt 不存 Langfuse，统一放在 `agent/prompts.py`，用函数封装（方
 | `analyze_image_system()` | analyze_reference_image 工具指令 | 无（固定） |
 
 Prompt 修改通过 git commit 记录，回滚用 `git revert`，无需外部依赖。
+
+---
+
+## API 接口
 
 ```
 POST   /api/sessions                              创建会话
