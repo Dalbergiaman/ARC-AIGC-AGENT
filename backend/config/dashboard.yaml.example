@@ -1,0 +1,16 @@
+# Dashboard Configuration Template
+# Copy this file to dashboard.yaml and fill in your API keys
+
+llm:
+  provider: bailian        # bailian | volcengine
+  model: qwen-vl-max
+  api_key: your-api-key-here
+
+image_provider:
+  provider: bailian        # bailian | volcengine | openrouter
+  api_key: your-api-key-here
+
+langfuse:
+  host: http://localhost:3000
+  public_key: your-public-key-here
+  secret_key: your-secret-key-here

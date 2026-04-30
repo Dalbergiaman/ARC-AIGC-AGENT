@@ -27,6 +27,7 @@
 | 前端状态 | Zustand |
 | 前端 UI | Tailwind CSS + shadcn/ui |
 | 可观测性 | Langfuse（LLM 调用追踪、Prompt 版本管理） |
+| Milvus 管理 | Attu（Milvus 可视化管理界面，`http://localhost:8080`） |
 
 ---
 
@@ -922,21 +923,21 @@ backend/tests/
 
 **A-1 基础设施启动**
 
-- [ ] 编写 `docker-compose.yml`（postgres:16 / redis:7-alpine / milvus:v2.4.0 / langfuse）
-- [ ] 配置 Langfuse 环境变量（`DATABASE_URL` 指向 postgres）
-- [ ] 验证四个服务全部健康启动（`docker compose up -d`）
-- [ ] 创建 `backend/config/dashboard.yaml.example` 模板文件
+- [x] 编写 `docker-compose.yml`（postgres:16 / redis:7-alpine / etcd:v3.5.18 / minio / milvus:v2.4.17 / langfuse:2 / attu:v2.4）
+- [x] 配置 Langfuse 环境变量（`DATABASE_URL` 指向 postgres，共用实例不同 database）
+- [x] 验证七个服务全部健康启动（`docker compose up -d`）
+- [x] 创建 `backend/config/dashboard.yaml.example` 模板文件
 
 > ⚠️ 注意：Milvus 依赖 etcd 和 minio 作为内部组件，官方 standalone 镜像已内置，直接用 `milvusdb/milvus:v2.4.0` 即可，不需要额外配置。
 
 **A-2 后端项目初始化**
 
-- [ ] 创建 `backend/` 目录，初始化 Python 虚拟环境，安装依赖（fastapi / uvicorn / sqlalchemy / asyncpg / langgraph / langchain-mcp-adapters / celery / redis / httpx / pyyaml / langfuse）
-- [ ] 编写 `backend/main.py`（FastAPI 应用入口，挂载路由）
-- [ ] 编写 `backend/config.py`（从环境变量读取 DB_URL / REDIS_URL 等）
-- [ ] 编写 `backend/models/database.py`（SQLAlchemy async engine + session）
-- [ ] 编写 `backend/models/schemas.py`（sessions / messages / reference_images / generation_tasks 表定义）
-- [ ] 运行 alembic 或直接建表，验证数据库连接正常
+- [x] 创建 `backend/` 目录，初始化 Python 虚拟环境（uv），安装依赖（fastapi / uvicorn / sqlalchemy / asyncpg / langgraph / langchain-mcp-adapters / celery / redis / httpx / pyyaml / langfuse）
+- [x] 编写 `backend/main.py`（FastAPI 应用入口，挂载路由，lifespan 自动建表）
+- [x] 编写 `backend/config.py`（从环境变量读取 DB_URL / REDIS_URL 等，pydantic-settings）
+- [x] 编写 `backend/models/database.py`（SQLAlchemy async engine + session）
+- [x] 编写 `backend/models/schemas.py`（sessions / messages / reference_images / generation_tasks 表定义）
+- [x] 启动验证：`/health` 返回 200，四张表自动创建成功
 
 > ⚠️ 注意：SQLAlchemy 使用异步模式（`asyncpg` driver），engine 用 `create_async_engine`，session 用 `AsyncSession`。
 
