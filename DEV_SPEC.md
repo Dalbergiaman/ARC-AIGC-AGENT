@@ -44,7 +44,7 @@ FastAPI 后端 (Python)
     ├── 图像生成模块（Celery 异步队列）
     └── 文件存储模块
          │
-         ├── LLM（GPT-4o / Claude，视觉理解）
+         ├── VLM（百炼 Qwen3-VL / 火山引擎豆包 VLM，视觉理解）
          ├── 图像生成（云端 API：百炼 / 豆包 / OpenRouter）
          └── 对象存储（本地 / MinIO / S3）
 ```
@@ -64,11 +64,13 @@ aigc_agent/
 │   │   ├── search.py                   # search_by_text / search_by_image 工具
 │   │   └── retrieve.py                 # get_image_by_id 工具
 │   ├── core/
+│   │   ├── embedding/                  # Embedding 模块（独立文件夹）
+│   │   │   ├── base.py                 # 抽象基类 EmbeddingClientBase
+│   │   │   └── bailian.py              # 百炼 text-embedding-v3 客户端（云端调用）
 │   │   ├── vlm_caption.py              # 调用对话 LLM API 生成图片 Caption
-│   │   ├── embedder.py                 # 文字 → Embedding 向量
 │   │   ├── clip_encoder.py             # 图片 → CLIP 向量（以图搜图用）
 │   │   ├── milvus_client.py            # Milvus 操作封装
-│   │   └── pg_client.py               # PostgreSQL 操作封装
+│   │   └── pg_client.py               # PostgreSQL 操作封装（image_library 表 CRUD，image_id 关联 Milvus）
 │   └── requirements.txt
 ├── frontend/                           # Next.js 前端
 │   ├── app/
@@ -141,7 +143,10 @@ aigc_agent/
     │   ├── session_service.py
     │   ├── message_service.py
     │   ├── storage_service.py
-    │   └── dashboard_service.py        # Dashboard 配置读写
+    │   └── dashboard_service.py        # Dashboard 配置读写（backend/config/dashboard.yaml）
+    ├── config/
+    │   ├── dashboard.yaml              # Dashboard 配置（含 API Key，.gitignore 忽略）
+    │   └── dashboard.yaml.example     # 配置模板（提交到 git）
     └── models/
         ├── database.py
         └── schemas.py
@@ -227,7 +232,7 @@ class DesignState(TypedDict):
 | `search_similar_cases` | query, filters | list[ImageRecord] | collect_info 阶段，RAG 参考 |
 | `enhance_prompt` | design_state, reference_analysis | EnhancedPrompt | 信息充分，首次生成前 |
 | `generate_image` | prompt, negative_prompt, ref_image_url, params | GenerationResult | 每次触发生成 |
-| `evaluate_generated_image` | image_url, design_state | EvaluationResult | 每次生成后自动评估 |
+| `evaluate_generated_image` | image_url, design_state, reference_images | EvaluationResult | 每次生成后自动评估 |
 | `refine_prompt` | original_prompt, evaluation | EnhancedPrompt | 评估不满意时修正 |
 | `store_to_library` | image_url, prompt, design_state, session_id | image_id | 用户确认存入图库时 |
 
@@ -393,6 +398,180 @@ class ImageGenerator:
 
 ---
 
+## 对话 LLM 统一接口设计
+
+### 平台范围
+
+仅支持百炼（Qwen3-VL）和火山引擎豆包 VLM，Dashboard 可切换，不扩展其他平台。
+
+| 平台 | 模型 | Endpoint | 格式 |
+|------|------|----------|------|
+| 阿里云百炼 | Qwen3-VL | `POST /compatible-mode/v1/chat/completions` | OpenAI 兼容格式，图片放 `content[].image_url` |
+| 火山引擎豆包 | Doubao VLM | `POST /api/v3/chat/completions` | OpenAI 兼容格式，图片放 `content[].image_url` |
+
+两个平台均兼容 OpenAI Chat Completions 格式，差异主要在 Endpoint 和 model 字段，封装在各客户端内。
+
+### 抽象基类
+
+```python
+class LLMClientBase(ABC):
+    @abstractmethod
+    async def ainvoke(self, messages: list[BaseMessage]) -> str:
+        """纯文本对话"""
+        ...
+
+    @abstractmethod
+    async def ainvoke_with_vision(
+        self,
+        messages: list[BaseMessage],
+        images: list[str]          # image_url 列表
+    ) -> str:
+        """带图片的视觉理解"""
+        ...
+
+    @abstractmethod
+    async def astream(
+        self,
+        messages: list[BaseMessage],
+        images: list[str] | None = None
+    ) -> AsyncIterator[str]:
+        """流式输出，streaming.py 通过此方法消费"""
+        ...
+```
+
+### 工厂
+
+```python
+class LLMClientFactory:
+    _registry = {
+        "bailian": BailianLLMClient,
+        "volcengine": VolcengineLLMClient,
+    }
+
+    @classmethod
+    def create(cls, provider: str, model: str, api_key: str) -> LLMClientBase:
+        return cls._registry[provider](model=model, api_key=api_key)
+```
+
+### 调度器（`core/llm/client.py`）
+
+```python
+class LLMClient:
+    async def ainvoke(self, messages, images=None) -> str:
+        config = await dashboard_service.get_config("llm")
+        client = LLMClientFactory.create(
+            provider=config["provider"],
+            model=config["model"],
+            api_key=config["api_key"]
+        )
+        if images:
+            return await client.ainvoke_with_vision(messages, images)
+        return await client.ainvoke(messages)
+```
+
+工具层和节点只调用 `LLMClient`，平台差异完全封装在各客户端内。
+
+---
+
+## Embedding 模块设计（image-rag-mcp）
+
+### 抽象基类
+
+```python
+class EmbeddingClientBase(ABC):
+    @abstractmethod
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """批量文本转向量，百炼支持批量调用，效率更高"""
+        ...
+
+    async def embed(self, text: str) -> list[float]:
+        """单条便捷方法，内部调用 embed_batch"""
+        return (await self.embed_batch([text]))[0]
+```
+
+### 百炼实现（`bailian.py`）
+
+- 模型：`text-embedding-v3`
+- 向量维度：1536
+- 调用方式：httpx POST，云端 API
+
+### 工厂
+
+```python
+class EmbeddingFactory:
+    _registry = {
+        "bailian": BailianEmbedding,
+    }
+
+    @classmethod
+    def create(cls, provider: str, api_key: str) -> EmbeddingClientBase:
+        return cls._registry[provider](api_key)
+```
+
+当前只有百炼一个实现，工厂模式保持与 LLM / 图像生成模块的一致性，后续扩展无需改调用方。
+
+---
+
+## 图像评估评分设计
+
+### EvaluationResult 数据结构
+
+```python
+@dataclass
+class EvaluationResult:
+    score: float                    # 加权总分 0.0~1.0，低于 0.8 触发重试
+    style_score: float              # 风格符合度
+    material_score: float           # 材质还原度
+    lighting_score: float           # 光线与氛围
+    composition_score: float        # 构图与视角
+    quality_score: float            # 整体质量（清晰度、无畸变）
+    reference_score: float | None   # 参考图相似度，无参考图时为 None
+    feedback: str                   # LLM 给出的一句话改进建议，供 refine_prompt 使用
+```
+
+### 评分维度与权重
+
+**无参考图时**（`reference_images` 为空）：
+
+| 维度 | 权重 | 评估内容 |
+|------|------|----------|
+| 风格符合度 | 30% | 建筑风格是否与 `style` 描述一致 |
+| 材质还原度 | 20% | 外立面材质（`facade_material`）是否可辨识 |
+| 光线与氛围 | 20% | 光线时段、方向、氛围（`lighting`）是否匹配 |
+| 构图与视角 | 15% | 视角（`viewpoint`）是否正确，构图是否合理 |
+| 整体质量 | 15% | 图片清晰度、无明显畸变、无 AI 瑕疵 |
+
+**有参考图时**（`reference_images` 非空）：
+
+| 维度 | 权重 | 评估内容 |
+|------|------|----------|
+| 风格符合度 | 25% | 同上 |
+| 材质还原度 | 15% | 同上 |
+| 光线与氛围 | 15% | 同上 |
+| 构图与视角 | 10% | 同上 |
+| 整体质量 | 10% | 同上 |
+| 参考图相似度 | 25% | 生成图与参考图在构图、色调、风格上的整体相似程度 |
+
+### 工具签名
+
+```python
+async def evaluate_generated_image(
+    image_url: str,
+    design_state: DesignState,
+    reference_images: list[ReferenceImageAnalysis]  # 空列表时不评估相似度维度
+) -> EvaluationResult:
+    ...
+```
+
+### refine_prompt 如何使用评分
+
+`refine_prompt` 收到 `EvaluationResult` 后，根据各维度分数针对性修正：
+- 材质分低 → 在 prompt 里强化材质描述
+- 参考图相似度低 → 提取参考图 caption 中的关键特征加入 prompt
+- 整体质量低 → 调整负向提示词（negative_prompt）
+
+---
+
 ## 记忆系统设计
 
 | 层次 | 内容 | 存储位置 | 生命周期 |
@@ -424,14 +603,14 @@ async def handle_message(session_id: str, message: str):
     await graph.ainvoke(...)
 ```
 
-**节点函数**：
+**Agent 节点**（ReAct 只有一个 agent 节点）：
 
 ```python
-@observe(name="node:collect_info")
-async def collect_info_node(state: AgentState) -> AgentState:
+@observe(name="node:agent")
+async def agent_node(state: AgentState) -> AgentState:
     langfuse_context.update_current_observation(
         input=state["messages"][-1].content,
-        metadata={"design_state": state["design_state"]}
+        metadata={"design_state": state["design_state"], "retry_count": state["retry_count"]}
     )
     result = await llm.ainvoke(...)
     langfuse_context.update_current_observation(output=result.content)
@@ -450,13 +629,15 @@ async def enhance_prompt(design_state: DesignState, ...) -> EnhancedPrompt:
 
 ```
 Trace: agent:turn  (session_id, user_id)
-  ├── Span: node:collect_info
+  ├── Span: node:agent（第 1 轮思考）
   ├── Span: tool:analyze_reference_image
+  ├── Span: node:agent（第 2 轮思考）
   ├── Span: tool:lookup_style_keywords
+  ├── Span: node:agent（第 N 轮思考）
   ├── Span: tool:enhance_prompt
   ├── Span: tool:generate_image
   ├── Span: tool:evaluate_generated_image
-  └── Span: tool:refine_prompt（重试时出现）
+  └── Span: tool:refine_prompt（重试时出现，后接新一轮 node:agent）
 ```
 
 ### Prompt 本地管理：`agent/prompts.py`
@@ -472,6 +653,89 @@ Prompt 不存 Langfuse，统一放在 `agent/prompts.py`，用函数封装（方
 | `analyze_image_system()` | analyze_reference_image 工具指令 | 无（固定） |
 
 Prompt 修改通过 git commit 记录，回滚用 `git revert`，无需外部依赖。
+
+---
+
+## Agent 与 image-rag-mcp 通信机制
+
+使用 `langchain-mcp-adapters` 库，将 FastMCP stdio 服务自动适配为 LangChain Tool，Agent 无感知底层通信细节。
+
+```python
+# backend/agent/graph.py（Agent 初始化时）
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+mcp_client = MultiServerMCPClient({
+    "image-rag": {
+        "command": "python",
+        "args": ["image-rag-mcp/server.py"],
+        "transport": "stdio"
+    }
+})
+mcp_tools = await mcp_client.get_tools()  # 自动转为 LangChain Tool
+# 与本地工具合并后传给 Agent
+all_tools = local_tools + mcp_tools
+```
+
+MCP 进程由 `MultiServerMCPClient` 管理生命周期，FastAPI 启动时初始化，关闭时自动终止。
+
+---
+
+## 图像生成任务流转（Celery）
+
+### 状态存储
+
+Celery result backend 使用 Redis，`task_id` 存入 `AgentState`，工具内部轮询 Redis 直到任务完成。
+
+### `generate_image` 工具内部流程
+
+```python
+# 1. 提交 Celery 任务，立即推送 generation_start 事件
+task = generate_image_task.delay(request)
+yield SSEEvent("generation_start", {"task_id": task.id, "provider": provider})
+
+# 2. 轮询 Redis，每 2s 检查一次，最多等 120s
+for _ in range(60):
+    result = AsyncResult(task.id)
+    if result.ready():
+        gen_result = result.get()
+        yield SSEEvent("generation_done", {...})
+        return gen_result
+    await asyncio.sleep(2)
+
+# 3. 超时处理：计入重试次数，推送 error 事件
+state["retry_count"] += 1
+yield SSEEvent("error", {"code": "GENERATION_TIMEOUT", "message": "生成超时，正在重试..."})
+raise TimeoutError("generation timeout")
+```
+
+超时后 Agent 自行决策是否重试（受 `retry_count <= 3` 约束）。
+
+---
+
+## 参考图上传流程
+
+### 存储策略
+
+通过 `storage_service` 抽象屏蔽环境差异：
+
+| 环境 | 存储位置 | URL 格式 |
+|------|----------|----------|
+| 本地开发 | `backend/uploads/` 目录 | `http://localhost:8000/static/uploads/{uuid}.jpg` |
+| 生产 | MinIO | `http://minio:9000/bucket/{uuid}.jpg` |
+
+切换通过环境变量 `STORAGE=local|minio` 控制。
+
+### 上传接口响应
+
+```json
+// POST /api/upload 响应
+{
+  "file_id": "uuid",
+  "url": "http://localhost:8000/static/uploads/xxx.jpg"
+}
+```
+
+前端拿到 `url` 用于预览，同时将 `url` 附在下一条消息里发给 Agent。Agent 收到后将 `url` 存入 `AgentState.reference_images`，并调用 `analyze_reference_image(image_url=url)` 进行视觉分析。
 
 ---
 
@@ -500,8 +764,8 @@ sessions          (id, design_state JSON, created_at)
 messages          (id, session_id, role, content, created_at)
 reference_images  (id, session_id, file_id, url, analysis JSON)
 generation_tasks  (id, session_id, prompt, image_url, status, created_at)
-dashboard_config  (id, key, value JSON, updated_at)
 -- LangGraph checkpointer 表由 langgraph-checkpoint-postgres 自动创建
+-- Dashboard 配置不存 DB，改用 backend/config/dashboard.yaml（见下方说明）
 
 -- 图库库（PostgreSQL，image-rag-mcp 使用）
 image_library (
@@ -526,6 +790,83 @@ style           # 标量过滤字段
 building_type   # 标量过滤字段
 image_url       # 标量字段，直接返回预览
 ```
+
+---
+
+## Dashboard 配置文件
+
+配置存储在 `backend/config/dashboard.yaml`，不入数据库。Dashboard 页面读写此文件，`dashboard_service.py` 封装读写逻辑。
+
+```yaml
+# backend/config/dashboard.yaml（含 API Key，已加入 .gitignore）
+llm:
+  provider: bailian        # bailian | volcengine
+  model: qwen-vl-max
+  api_key: sk-xxx
+
+image_provider:
+  provider: bailian        # bailian | volcengine | openrouter
+  api_key: sk-xxx
+
+langfuse:
+  host: http://localhost:3000
+  public_key: pk-xxx
+  secret_key: sk-xxx
+```
+
+`backend/config/dashboard.yaml.example` 作为模板提交到 git，实际配置文件加入 `.gitignore`。
+
+---
+
+## Docker Compose 服务组成
+
+开发环境四个基础服务，文件存储用本地目录（不含 MinIO）：
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    ports: ["5432:5432"]
+    environment:
+      POSTGRES_DB: aigc_agent
+      POSTGRES_PASSWORD: postgres
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  milvus:
+    image: milvusdb/milvus:v2.4.0
+    ports: ["19530:19530", "9091:9091"]
+
+  langfuse:
+    image: langfuse/langfuse:latest
+    ports: ["3000:3000"]
+    depends_on: [postgres]
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/langfuse
+```
+
+启动顺序：postgres → redis + milvus（并行）→ langfuse。生产环境 MinIO 单独部署，切换 `STORAGE=minio` 环境变量即可。
+
+---
+
+## search_similar_cases 触发与使用
+
+**触发时机**：Agent 自主决策，不设硬性规则。`prompts.py` 中给出调用建议：用户描述了建筑风格或类型后，建议调用一次 `search_similar_cases`，将结果存入 `AgentState.similar_cases`。
+
+**结果使用**：`similar_cases` 作为参数传给 `enhance_prompt`，LLM 参考历史案例的提示词风格来生成新提示词。
+
+```python
+async def enhance_prompt(
+    design_state: DesignState,
+    reference_analysis: list[ReferenceImageAnalysis],
+    similar_cases: list[ImageRecord]   # RAG 检索结果，可为空列表
+) -> EnhancedPrompt:
+    ...
+```
+
+`similar_cases` 为空时 `enhance_prompt` 正常工作，RAG 只是锦上添花，不是必要依赖。
 
 ---
 
@@ -559,11 +900,12 @@ image_url       # 标量字段，直接返回预览
 - [ ] 图像生成模块（Celery 异步）
   - [ ] `core/image/base.py`：抽象基类 + GenerationRequest / GenerationResult 数据结构
   - [ ] `core/image/factory.py`：ImageGeneratorFactory
-  - [ ] `core/image/generator.py`：调度器（从 dashboard_config 读取平台配置）
+  - [ ] `core/image/generator.py`：调度器（从 dashboard.yaml 读取平台配置）
   - [ ] `core/image/bailian_client.py`：百炼客户端（httpx，异步任务制+轮询）
   - [ ] `core/image/volcengine_client.py`：豆包客户端（httpx，同步返回）
   - [ ] `core/image/openrouter_client.py`：OpenRouter 客户端（httpx，base64→存储→URL）
-- [ ] Dashboard 配置 API
+- [ ] Dashboard 配置 API（读写 `backend/config/dashboard.yaml`，提供 GET/PUT 接口）
+- [ ] `backend/config/dashboard.yaml.example` 模板文件
 - [ ] Langfuse 集成
   - [ ] `agent/prompts.py`：所有 Prompt 函数（collect_info / enhance_prompt / evaluate_image / refine_prompt / analyze_image）
   - [ ] 每个节点函数加 `@observe()` 装饰
@@ -598,7 +940,7 @@ image_url       # 标量字段，直接返回预览
 - [ ] Milvus Collection 初始化（caption_vector + image_vector 双字段）
 - [ ] image_library 表创建（PostgreSQL）
 - [ ] VLM Caption 模块（vlm_caption.py，复用 dashboard_config 中的 LLM 配置）
-- [ ] 文字 Embedding 模块（embedder.py）
+- [ ] 文字 Embedding 模块（`embedding/base.py` + `embedding/bailian.py`，百炼 text-embedding-v3）
 - [ ] CLIP 图片向量模块（clip_encoder.py）
 - [ ] store_generated_image 工具实现
 - [ ] search_by_text 工具实现
@@ -632,10 +974,8 @@ image_url       # 标量字段，直接返回预览
 - 2026-04-30：图像生成平台统一接口采用抽象工厂模式 + httpx；三平台格式差异封装在各客户端内，工具层只调用统一调度器
 - 2026-04-30：对话模型改为 VLM，支持百炼（Qwen3-VL）和火山引擎豆包 VLM，Dashboard 可切换；LLM 层同样采用工厂模式，平台范围限定为百炼和火山引擎
 - 2026-04-30：MCP 框架选用 FastMCP（mcp.server.fastmcp，官方 mcp 库内置）
+- 2026-04-30：Embedding 模型选用百炼 text-embedding-v3（云端调用），独立放在 image-rag-mcp/core/embedding/ 文件夹，不与 LLM 混放；pg_client.py 负责 image_library 表 CRUD，通过 image_id 关联 Milvus 向量
 
 ---
 
-## 待决策
 
-- [x] Langfuse 使用自部署还是云端服务（langfuse.com）？→ Docker 自部署
-- [x] Dashboard 的 API Key 存储方式：明文存 DB 还是加密存储？→ 明文存 DB

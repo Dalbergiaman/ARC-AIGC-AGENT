@@ -51,6 +51,8 @@ htmlcov/
 .pytest_cache/
 coverage.xml
 
-# Celery
+# Config
+backend/config/dashboard.yaml
+
 celerybeat-schedule
 celerybeat.pid
