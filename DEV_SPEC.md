@@ -112,11 +112,6 @@ aigc_agent/
     │   ├── state.py                    # AgentState 定义
     │   ├── checkpointer.py             # PostgreSQL checkpointer 初始化
     │   ├── prompts.py                  # 所有节点/工具的 Prompt 函数，本地版本管理（git）
-    │   ├── nodes/
-    │   │   ├── collect_info.py         # 信息收集节点
-    │   │   ├── analyze_image.py        # 参考图分析节点
-    │   │   ├── build_prompt.py         # Prompt 构建节点
-    │   │   └── check_completeness.py   # 信息完整性判断节点（已被 ReAct 循环替代，保留备用）
     │   └── tools/
     │       ├── image_analysis.py       # analyze_reference_image — 视觉 LLM 分析参考图
     │       ├── style_lookup.py         # lookup_style_keywords — 查询风格关键词库
