@@ -130,7 +130,7 @@ aigc_agent/
     │   │   ├── factory.py              # LLMClientFactory（bailian / volcengine）
     │   │   ├── bailian_client.py       # 百炼 VLM 客户端（Qwen3-VL 等）
     │   │   ├── volcengine_client.py    # 火山引擎豆包 VLM 客户端
-    │   │   ├── client.py               # 调度器，从 dashboard_config 读取当前模型
+    │   │   ├── client.py               # 调度器，从 dashboard.yaml 读取当前模型
     │   │   └── streaming.py            # SSE 流式输出处理
     │   └── image/
     │       ├── generator.py            # 图像生成调度器（多平台统一接口）
@@ -870,83 +870,282 @@ async def enhance_prompt(
 
 ---
 
+## 测试策略
+
+### 原则
+
+写一个模块，同步写对应测试，不攒到最后补。测试文件放在 `backend/tests/`，镜像 `core/` 和 `services/` 的目录结构。
+
+```
+backend/tests/
+├── core/
+│   ├── llm/
+│   │   ├── test_factory.py
+│   │   └── test_client.py
+│   └── image/
+│       ├── test_factory.py
+│       └── test_generator.py
+├── services/
+│   └── test_dashboard_service.py
+└── agent/
+    └── tools/
+        ├── test_image_evaluator.py
+        └── test_prompt_builder.py
+```
+
+### 适合写单元测试的模块
+
+| 模块 | 测试重点 |
+|------|----------|
+| `core/llm/factory.py` | 工厂注册逻辑、未知 provider 抛异常 |
+| `core/image/factory.py` | 同上 |
+| `core/llm/client.py` | 有无图片时路由到正确方法 |
+| `agent/tools/image_evaluator.py` | 评分加权计算、有无参考图时权重切换 |
+| `agent/tools/prompt_builder.py` | similar_cases 为空时正常降级 |
+| `services/dashboard_service.py` | YAML 读写、缺失 key 时的默认值处理 |
+
+### 不写单元测试的模块
+
+- **三个图像生成平台客户端**：依赖真实 API，mock 掉失去意义，靠手动联调
+- **LangGraph Graph**：集成测试成本高，靠手动跑对话流程验证
+- **SSE 流式输出**：端到端测试更合适，单元测试难以覆盖流式场景
+
+---
+
 ## 开发进度
 
-### 后端
+---
 
-- [ ] 项目初始化（FastAPI + 依赖安装）
-- [ ] 数据库模型定义（SQLAlchemy）
-- [ ] 会话管理 API（session CRUD）
-- [ ] 文件上传模块
-- [ ] LangGraph Agent 搭建
-  - [ ] AgentState 定义（含 generation_results、retry_count、last_evaluation、similar_cases）
-  - [ ] PostgreSQL checkpointer 初始化（langgraph-checkpoint-postgres）
-  - [ ] ReAct 循环 Graph 组装（agent 节点 + tools_condition）
-  - [ ] 工具实现：analyze_reference_image
-  - [ ] 工具实现：lookup_style_keywords
-  - [ ] 工具实现：search_similar_cases（调用 image-rag-mcp）
-  - [ ] 工具实现：enhance_prompt
-  - [ ] 工具实现：generate_image
-  - [ ] 工具实现：evaluate_generated_image
-  - [ ] 工具实现：refine_prompt
-  - [ ] 工具实现：store_to_library（调用 image-rag-mcp）
-  - [ ] 重试上限控制（retry_count <= 3）
-  - [ ] Graph 集成测试
-- [ ] 对话 API（SSE 流式输出）
-  - [ ] `core/llm/streaming.py`：astream_events 过滤与事件映射
-  - [ ] `summarize_tool_output`：工具输出转用户友好摘要
-  - [ ] `generate_image` 工具的 generation_start/done 解耦推送
-  - [ ] 事件 id 递增与断线重连支持（Last-Event-ID）
-- [ ] 图像生成模块（Celery 异步）
-  - [ ] `core/image/base.py`：抽象基类 + GenerationRequest / GenerationResult 数据结构
-  - [ ] `core/image/factory.py`：ImageGeneratorFactory
-  - [ ] `core/image/generator.py`：调度器（从 dashboard.yaml 读取平台配置）
-  - [ ] `core/image/bailian_client.py`：百炼客户端（httpx，异步任务制+轮询）
-  - [ ] `core/image/volcengine_client.py`：豆包客户端（httpx，同步返回）
-  - [ ] `core/image/openrouter_client.py`：OpenRouter 客户端（httpx，base64→存储→URL）
-- [ ] Dashboard 配置 API（读写 `backend/config/dashboard.yaml`，提供 GET/PUT 接口）
-- [ ] `backend/config/dashboard.yaml.example` 模板文件
-- [ ] Langfuse 集成
-  - [ ] `agent/prompts.py`：所有 Prompt 函数（collect_info / enhance_prompt / evaluate_image / refine_prompt / analyze_image）
-  - [ ] 每个节点函数加 `@observe()` 装饰
-  - [ ] 每个工具函数加 `@observe()` 装饰
-  - [ ] `chat.py` 路由入口加最外层 `@observe(name="agent:turn")` Trace
-  - [ ] 节点内 `langfuse_context.update_current_observation()` 关联 LLM 输入输出
+### A 阶段：基础设施与项目骨架
 
-### 前端
+> 目标：本地开发环境全部跑通，后端和前端项目可以启动，数据库连接正常。
 
-- [ ] 项目初始化（Next.js + 依赖安装）
-- [ ] 基础布局与路由
-- [ ] 对话界面（ChatPanel + MessageList + InputBar）
-- [ ] 参考图上传组件（ImageUploader）
-- [ ] SSE 流式消息渲染（useSSE hook）
-- [ ] 图像生成状态轮询（useImageGeneration hook）
-- [ ] 生成结果展示（ResultGallery）
-- [ ] Zustand 全局状态管理
-- [ ] Dashboard 页面
-  - [ ] 对话模型选择（ModelSelector）
-  - [ ] 图像生成平台配置（ImageProviderConfig）
-  - [ ] API Key 管理（ApiKeyForm）
+**A-1 基础设施启动**
 
-### 基础设施
+- [ ] 编写 `docker-compose.yml`（postgres:16 / redis:7-alpine / milvus:v2.4.0 / langfuse）
+- [ ] 配置 Langfuse 环境变量（`DATABASE_URL` 指向 postgres）
+- [ ] 验证四个服务全部健康启动（`docker compose up -d`）
+- [ ] 创建 `backend/config/dashboard.yaml.example` 模板文件
 
-- [ ] Docker Compose 配置（PostgreSQL + Redis + Langfuse + Milvus）
-- [ ] 环境变量配置
-- [ ] Langfuse 部署或接入云端服务
+> ⚠️ 注意：Milvus 依赖 etcd 和 minio 作为内部组件，官方 standalone 镜像已内置，直接用 `milvusdb/milvus:v2.4.0` 即可，不需要额外配置。
 
-### Image RAG MCP 服务
+**A-2 后端项目初始化**
 
-- [ ] MCP stdio 服务框架搭建（server.py）
-- [ ] Milvus Collection 初始化（caption_vector + image_vector 双字段）
-- [ ] image_library 表创建（PostgreSQL）
-- [ ] VLM Caption 模块（vlm_caption.py，复用 dashboard_config 中的 LLM 配置）
-- [ ] 文字 Embedding 模块（`embedding/base.py` + `embedding/bailian.py`，百炼 text-embedding-v3）
-- [ ] CLIP 图片向量模块（clip_encoder.py）
-- [ ] store_generated_image 工具实现
-- [ ] search_by_text 工具实现
-- [ ] search_by_image 工具实现
-- [ ] get_image_by_id 工具实现
-- [ ] Agent 侧工具接入（store_to_library.py / search_library.py）
+- [ ] 创建 `backend/` 目录，初始化 Python 虚拟环境，安装依赖（fastapi / uvicorn / sqlalchemy / asyncpg / langgraph / langchain-mcp-adapters / celery / redis / httpx / pyyaml / langfuse）
+- [ ] 编写 `backend/main.py`（FastAPI 应用入口，挂载路由）
+- [ ] 编写 `backend/config.py`（从环境变量读取 DB_URL / REDIS_URL 等）
+- [ ] 编写 `backend/models/database.py`（SQLAlchemy async engine + session）
+- [ ] 编写 `backend/models/schemas.py`（sessions / messages / reference_images / generation_tasks 表定义）
+- [ ] 运行 alembic 或直接建表，验证数据库连接正常
+
+> ⚠️ 注意：SQLAlchemy 使用异步模式（`asyncpg` driver），engine 用 `create_async_engine`，session 用 `AsyncSession`。
+
+**A-3 前端项目初始化**
+
+- [ ] 在 `frontend/` 下初始化 Next.js 项目（App Router / TypeScript / Tailwind CSS）
+- [ ] 安装依赖（shadcn/ui / zustand）
+- [ ] 创建基础路由：`/`（首页）、`/chat/[sessionId]`、`/dashboard`
+- [ ] 验证 `npm run dev` 正常启动
+
+**A-4 Dashboard 配置模块**
+
+- [ ] 编写 `backend/services/dashboard_service.py`（读写 `backend/config/dashboard.yaml`，缺失 key 返回默认值）
+- [ ] 编写 `backend/api/routes/dashboard.py`（`GET /api/dashboard/config` / `PUT /api/dashboard/config` / `GET /api/dashboard/providers`）
+- [ ] 编写前端 `dashboard/page.tsx` + `ModelSelector` / `ImageProviderConfig` / `ApiKeyForm` 组件，调用 Dashboard API 保存配置
+
+> 🧪 测试：`tests/services/test_dashboard_service.py`
+> - YAML 正常读写
+> - 缺失 key 时返回默认值，不抛异常
+> - 写入后再读取值一致
+
+---
+
+### B 阶段：核心能力层
+
+> 目标：LLM 客户端、图像生成客户端、Embedding 客户端全部可独立调用，不依赖 Agent。
+
+**B-1 LLM 客户端**
+
+- [ ] 编写 `core/llm/base.py`（`LLMClientBase` 抽象基类，定义 `ainvoke` / `ainvoke_with_vision` / `astream` 三个方法）
+- [ ] 编写 `core/llm/bailian_client.py`（httpx 调用百炼 `/compatible-mode/v1/chat/completions`，图片放 `content[].image_url`）
+- [ ] 编写 `core/llm/volcengine_client.py`（httpx 调用豆包 `/api/v3/chat/completions`，格式同上）
+- [ ] 编写 `core/llm/factory.py`（`LLMClientFactory`，注册 bailian / volcengine）
+- [ ] 编写 `core/llm/client.py`（`LLMClient` 调度器，从 `dashboard_service` 读取配置，有图片时路由到 `ainvoke_with_vision`）
+
+> ⚠️ 注意：两个平台的 `model` 字段名称不同，百炼用 `qwen-vl-max`，豆包用具体的 endpoint model id，需从 dashboard.yaml 的 `model` 字段读取，不要硬编码。
+
+> 🧪 测试：`tests/core/llm/test_factory.py`
+> - 注册的 provider 能正确实例化
+> - 未知 provider 抛 `KeyError` 或自定义异常
+>
+> `tests/core/llm/test_client.py`
+> - `images=None` 时调用 `ainvoke`
+> - `images` 非空时调用 `ainvoke_with_vision`
+
+**B-2 图像生成客户端**
+
+- [ ] 编写 `core/image/base.py`（`ImageGeneratorBase` 抽象基类 + `GenerationRequest` / `GenerationResult` dataclass）
+- [ ] 编写 `core/image/factory.py`（`ImageGeneratorFactory`，注册 bailian / volcengine / openrouter）
+- [ ] 编写 `core/image/bailian_client.py`（httpx，提交任务拿 `task_id` → 轮询 `/api/v1/tasks/{task_id}` 直到 `SUCCEEDED`，轮询间隔 3s，超时 120s）
+- [ ] 编写 `core/image/volcengine_client.py`（httpx，同步返回，从 `data[0].url` 取图片 URL）
+- [ ] 编写 `core/image/openrouter_client.py`（httpx，从 `choices[0].message.images[0]` 取 base64，上传到 `storage_service` 后返回 URL）
+- [ ] 编写 `core/image/generator.py`（`ImageGenerator` 调度器，从 dashboard.yaml 读取平台配置）
+- [ ] 配置 Celery（`backend/celery_app.py`，broker=Redis，result_backend=Redis）
+- [ ] 编写 Celery task `generate_image_task`，内部调用 `ImageGenerator.generate()`
+
+> ⚠️ 注意：百炼图像生成是异步任务制，轮询逻辑封装在客户端内部，对外暴露同步接口。OpenRouter 返回 base64，需先上传到本地存储再返回 URL，不能直接把 base64 传给前端。
+
+> 🧪 测试：`tests/core/image/test_factory.py`
+> - 注册的 provider 能正确实例化
+> - 未知 provider 抛异常
+
+**B-3 文件存储模块**
+
+- [ ] 编写 `backend/services/storage_service.py`（`STORAGE=local` 时写 `backend/uploads/`，返回 `/static/uploads/{uuid}.ext`；`STORAGE=minio` 时上传 MinIO）
+- [ ] 在 `main.py` 挂载 `/static` 静态文件目录（开发环境）
+- [ ] 编写 `backend/api/routes/upload.py`（`POST /api/upload`，返回 `{file_id, url}`）
+
+> ⚠️ 注意：上传文件需校验 MIME 类型，只允许 `image/jpeg` / `image/png` / `image/webp`，防止上传非图片文件。
+
+**B-4 Embedding 客户端（image-rag-mcp）**
+
+- [ ] 编写 `image-rag-mcp/core/embedding/base.py`（`EmbeddingClientBase`，定义 `embed_batch` 抽象方法，`embed` 单条便捷方法）
+- [ ] 编写 `image-rag-mcp/core/embedding/bailian.py`（httpx 调用百炼 text-embedding-v3，向量维度 1536）
+- [ ] 编写 `image-rag-mcp/core/embedding/factory.py`（`EmbeddingFactory`，注册 bailian）
+
+---
+
+### C 阶段：Agent 核心
+
+> 目标：Agent 可以完整跑通一轮对话 → 生成图片 → 评估 → 重试的完整流程。
+
+**C-1 会话与消息 API**
+
+- [ ] 编写 `backend/services/session_service.py` / `message_service.py`（sessions / messages 表 CRUD）
+- [ ] 编写 `backend/api/routes/session.py`（`POST /api/sessions` / `GET /api/sessions/{id}`）
+
+**C-2 Agent 状态与 Graph 骨架**
+
+- [ ] 编写 `backend/agent/state.py`（`AgentState` / `DesignState` / `ReferenceImageAnalysis` / `GenerationResult` / `EvaluationResult` / `ImageRecord` 全部类型定义）
+- [ ] 编写 `backend/agent/checkpointer.py`（初始化 `langgraph-checkpoint-postgres`，连接 PostgreSQL）
+- [ ] 编写 `backend/agent/graph.py` 骨架（ReAct 循环，`agent` 节点 + `tools_condition`，`recursion_limit=25`，`interrupt_before=["agent"]`，暂时不挂工具）
+- [ ] 验证空 Graph 可以正常 `ainvoke`
+
+> ⚠️ 注意：`langgraph-checkpoint-postgres` 需要在 FastAPI 启动时初始化（`lifespan` 事件），不能在请求时临时创建连接。
+
+**C-3 信息收集工具**
+
+- [ ] 编写 `agent/prompts.py`（`collect_info_system` / `analyze_image_system` / `lookup_style_system` 三个 Prompt 函数）
+- [ ] 编写 `agent/tools/image_analysis.py`（`analyze_reference_image`：调用 `LLMClient.ainvoke_with_vision`，返回 `ReferenceImageAnalysis`）
+- [ ] 编写 `agent/tools/style_lookup.py`（`lookup_style_keywords`：从 `prompt_templates.py` 查询风格关键词，纯本地查询，无 LLM 调用）
+- [ ] 将两个工具挂入 Graph，手动测试工具调用
+
+**C-4 Prompt 构建与图像生成工具**
+
+- [ ] 补充 `agent/prompts.py`（`enhance_prompt_system` / `refine_prompt_system`）
+- [ ] 编写 `agent/tools/prompt_builder.py`（`enhance_prompt`：调用 LLM 生成结构化提示词；`refine_prompt`：根据 `EvaluationResult` 各维度分数针对性修正）
+- [ ] 编写 `agent/tools/image_generator.py`（`generate_image`：提交 Celery 任务，轮询 Redis，超时计入 `retry_count`，推送 `generation_start` / `generation_done` SSE 事件）
+- [ ] 将工具挂入 Graph
+
+> ⚠️ 注意：`generate_image` 工具内部是 async 轮询，需用 `asyncio.sleep` 而非 `time.sleep`，否则会阻塞 FastAPI 事件循环。
+
+> 🧪 测试：`tests/agent/tools/test_prompt_builder.py`
+> - `similar_cases=[]` 时 `enhance_prompt` 正常返回，不报错
+> - `refine_prompt` 材质分低时输出包含材质相关关键词（可用 mock LLM）
+
+**C-5 评估与重试工具**
+
+- [ ] 补充 `agent/prompts.py`（`evaluate_image_system`，区分有无参考图两套权重说明）
+- [ ] 编写 `agent/tools/image_evaluator.py`（`evaluate_generated_image`：调用 VLM 对生成图打分，`reference_images` 为空时用 5 维权重，非空时用 6 维权重，返回 `EvaluationResult`）
+- [ ] 在 Graph 中实现重试逻辑（`retry_count < 3` 且 `score < 0.8` 时循环，`retry_count == 3` 时取 `generation_results` 中 score 最高的结果）
+
+> 🧪 测试：`tests/agent/tools/test_image_evaluator.py`
+> - `reference_images=[]` 时权重之和为 1.0，不含 `reference_score`
+> - `reference_images` 非空时权重之和为 1.0，含 `reference_score`
+> - 加权计算结果精度正确
+
+**C-6 SSE 流式输出**
+
+- [ ] 编写 `core/llm/streaming.py`（从 LangGraph `astream_events` 过滤，映射到 7 种 SSE 事件类型，`summarize_tool_output` 转用户友好摘要）
+- [ ] 编写 `backend/api/routes/chat.py`（`POST /api/chat/sessions/{id}/messages`，SSE 响应，事件 id 递增，支持 `Last-Event-ID` 断线重连）
+- [ ] 加最外层 `@observe(name="agent:turn")` Trace
+
+> ⚠️ 注意：FastAPI SSE 响应需设置 `Content-Type: text/event-stream` 和 `Cache-Control: no-cache`，并在每个事件后 flush。断线重连时从 `Last-Event-ID` 对应的事件之后续传，需在内存或 Redis 中短暂缓存最近的事件序列（TTL 60s 即可）。
+
+**C-7 Langfuse 集成**
+
+- [ ] 在 `backend/main.py` 初始化 Langfuse（从 dashboard.yaml 读取 host / public_key / secret_key）
+- [ ] 所有工具函数加 `@observe()` 装饰
+- [ ] `agent` 节点函数加 `@observe(name="node:agent")`
+- [ ] 节点内用 `langfuse_context.update_current_observation()` 关联 LLM 输入输出
+- [ ] 验证 Langfuse UI 中能看到完整 Trace 树
+
+---
+
+### D 阶段：image-rag-mcp 服务
+
+> 目标：图库存储和检索功能完整可用，Agent 可以调用 MCP 工具存图和搜图。
+
+**D-1 MCP 服务骨架与存储初始化**
+
+- [ ] 编写 `image-rag-mcp/server.py`（FastMCP stdio 入口，注册工具）
+- [ ] 初始化 Milvus Collection（`caption_vector` 1536 维 + `image_vector` 512 维，标量字段 style / building_type / image_url）
+- [ ] 创建 PostgreSQL `image_library` 表
+- [ ] 编写 `image-rag-mcp/core/pg_client.py`（`image_library` 表 CRUD，`image_id` 作为 Milvus 关联键）
+- [ ] 编写 `image-rag-mcp/core/milvus_client.py`（insert / search 封装）
+
+> ⚠️ 注意：Milvus Collection 创建时需指定 `index_type`（推荐 `HNSW`）和 `metric_type`（`IP` 内积或 `L2`），建议用 `IP` + 归一化向量，检索结果更稳定。
+
+**D-2 VLM Caption 与向量化**
+
+- [ ] 编写 `image-rag-mcp/core/vlm_caption.py`（读取 dashboard.yaml 中的 LLM 配置，调用 `ainvoke_with_vision` 生成图片描述）
+- [ ] 编写 `image-rag-mcp/core/clip_encoder.py`（加载 CLIP 模型，图片 URL → 512 维向量）
+
+> ⚠️ 注意：CLIP 模型首次加载较慢，建议在 MCP 服务启动时预加载，不要在每次工具调用时重新加载。
+
+**D-3 MCP 工具实现**
+
+- [ ] 编写 `image-rag-mcp/tools/store.py`（`store_generated_image`：VLM caption → embedding → 存 Milvus + PostgreSQL）
+- [ ] 编写 `image-rag-mcp/tools/search.py`（`search_by_text`：文字 → embedding → Milvus 检索；`search_by_image`：图片 → CLIP → Milvus 检索）
+- [ ] 编写 `image-rag-mcp/tools/retrieve.py`（`get_image_by_id`：按 image_id 查 PostgreSQL）
+
+**D-4 Agent 侧接入**
+
+- [ ] 编写 `agent/tools/store_to_library.py`（`store_to_library`：通过 `langchain-mcp-adapters` 调用 MCP `store_generated_image`）
+- [ ] 编写 `agent/tools/search_library.py`（`search_similar_cases`：通过 MCP `search_by_text` 检索，结果存入 `AgentState.similar_cases`）
+- [ ] 在 `agent/graph.py` 初始化时启动 `MultiServerMCPClient`，将 MCP 工具合并进工具列表
+- [ ] 端到端测试：存一张图 → 检索 → 验证结果返回正确
+
+---
+
+### E 阶段：前端对接与联调
+
+> 目标：前端完整对接后端，完整走通用户对话 → 上传参考图 → 生成图片 → 存入图库的全流程。
+
+**E-1 对话界面**
+
+- [ ] 编写 `hooks/useSSE.ts`（消费 SSE 流，按事件类型分发：`text_delta` 追加文字、`tool_start/end` 显示状态条、`generation_start/done` 显示生成卡片）
+- [ ] 编写 `components/chat/ChatPanel.tsx` / `MessageList.tsx` / `InputBar.tsx`
+- [ ] 编写 `store/chatStore.ts`（Zustand，管理 messages / sessionId / generationStatus）
+- [ ] 验证纯文字对话流程正常
+
+**E-2 参考图上传**
+
+- [ ] 编写 `components/chat/ImageUploader.tsx`（拖拽或点击上传，调用 `POST /api/upload`，预览缩略图）
+- [ ] 上传成功后将 `url` 附在下一条消息发送给 Agent
+- [ ] 验证 Agent 收到图片后触发 `analyze_reference_image`
+
+**E-3 生成结果展示**
+
+- [ ] 编写 `components/gallery/ResultGallery.tsx`（展示历史生成结果，支持查看大图）
+- [ ] 编写 `hooks/useImageGeneration.ts`（监听 `generation_done` 事件，更新图片列表）
+- [ ] 生成完成后展示"是否存入图库"确认按钮，用户确认后发消息触发 `store_to_library`
+
+**E-4 全流程联调**
+
+- [ ] 完整走通：创建会话 → 多轮对话 → 上传参考图 → 触发生成 → 评估重试 → 展示结果 → 存入图库 → 检索相似案例
+- [ ] 验证断线重连（关闭 SSE 连接后重新连接，从断点续传）
+- [ ] 验证用户中断（生成中途发新消息，Agent 正确感知并重新决策）
 
 ---
 
