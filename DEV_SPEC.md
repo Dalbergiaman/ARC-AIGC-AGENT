@@ -943,10 +943,10 @@ backend/tests/
 
 **A-3 前端项目初始化**
 
-- [ ] 在 `frontend/` 下初始化 Next.js 项目（App Router / TypeScript / Tailwind CSS）
-- [ ] 安装依赖（shadcn/ui / zustand）
-- [ ] 创建基础路由：`/`（首页）、`/chat/[sessionId]`、`/dashboard`
-- [ ] 验证 `npm run dev` 正常启动
+- [x] 在 `frontend/` 下初始化 Next.js 项目（App Router / TypeScript / Tailwind CSS）
+- [x] 安装依赖（shadcn/ui / zustand）
+- [x] 创建基础路由：`/`（首页）、`/chat/[sessionId]`、`/dashboard`
+- [x] 验证 `npm run dev` 正常启动
 
 **A-4 Dashboard 配置模块**
 
