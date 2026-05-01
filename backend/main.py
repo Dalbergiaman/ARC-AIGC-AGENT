@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from api.routes.dashboard import router as dashboard_router
 from config import settings
 from models.database import engine
 from models.schemas import Base
@@ -17,6 +18,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AIGC Agent", lifespan=lifespan)
+app.include_router(dashboard_router)
 
 
 @app.get("/health")

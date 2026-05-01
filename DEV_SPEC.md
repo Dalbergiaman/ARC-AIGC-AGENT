@@ -950,9 +950,9 @@ backend/tests/
 
 **A-4 Dashboard 配置模块**
 
-- [ ] 编写 `backend/services/dashboard_service.py`（读写 `backend/config/dashboard.yaml`，缺失 key 返回默认值）
-- [ ] 编写 `backend/api/routes/dashboard.py`（`GET /api/dashboard/config` / `PUT /api/dashboard/config` / `GET /api/dashboard/providers`）
-- [ ] 编写前端 `dashboard/page.tsx` + `ModelSelector` / `ImageProviderConfig` / `ApiKeyForm` 组件，调用 Dashboard API 保存配置
+- [x] 编写 `backend/services/dashboard_service.py`（读写 `backend/config/dashboard.yaml`，缺失 key 返回默认值）
+- [x] 编写 `backend/api/routes/dashboard.py`（`GET /api/dashboard/config` / `PUT /api/dashboard/config` / `GET /api/dashboard/providers`）
+- [x] 编写前端 `dashboard/page.tsx` + `ModelSelector` / `ImageProviderConfig` / `ApiKeyForm` 组件，调用 Dashboard API 保存配置
 
 > 🧪 测试：`tests/services/test_dashboard_service.py`
 > - YAML 正常读写
@@ -1152,9 +1152,11 @@ backend/tests/
 
 ## 当前状态
 
-**阶段**：架构设计完成，尚未开始编码
+**阶段**：A-1、A-2、A-3、A-4 已完成，当前进入 B-1（LLM 客户端）
 
 **最近决策记录**：
+- 2026-05-01：完成 A-4 Dashboard 配置模块：后端新增 `dashboard_service.py` 与 `dashboard.py` 路由（`GET/PUT /api/dashboard/config`、`GET /api/dashboard/providers`）；`PUT /config` 改为严格字段校验（仅允许 llm/image_provider/langfuse 及其定义字段），并采用部分更新（merge patch）；前端 Dashboard 调整为左侧导航（Model Config / Langfuse）+ 独立参数块（LLM、Image Provider、Langfuse）+ 顶部返回主界面按钮。
+- 2026-05-01：完成 A-3 前端初始化：创建 Next.js（App Router + TypeScript + Tailwind）项目，接入 shadcn/ui 与 zustand，落地 `/`、`/chat/[sessionId]`、`/dashboard` 基础路由；开发环境端口改为 3001，前端通过 `next.config.ts` rewrites 代理 `/api/*` 到 `http://localhost:8000/api/*`
 - 2026-04-30：确定使用 LangGraph 搭建 Agent，替代原方案中的自定义 architect_agent.py
 - 2026-04-30：记忆系统分为短期/工作/参考图/长期四个层次
 - 2026-04-30：图像生成使用 Celery 异步队列，前端轮询状态
@@ -1162,7 +1164,7 @@ backend/tests/
 - 2026-04-30：不做用户登录系统，改为 Dashboard 页面供用户配置模型和 API Key
 - 2026-04-30：LangGraph checkpointer 使用 PostgreSQL（langgraph-checkpoint-postgres）
 - 2026-04-30：Langfuse 使用 Docker 自部署，纳入 docker-compose.yml
-- 2026-04-30：Dashboard API Key 明文存 DB（dashboard_config 表），内部工具无需加密
+- 2026-04-30：Dashboard API Key 明文存配置文件（`backend/config/dashboard.yaml`），内部工具无需加密
 - 2026-04-30：新增 image-rag-mcp 独立服务，通过 stdio 与 Agent 通信
 - 2026-04-30：向量存储策略：caption_vector（文字检索）+ image_vector（以图搜图）双向量存 Milvus，提示词和元数据存 PostgreSQL image_library 表，通过 image_id 关联
 - 2026-04-30：VLM Caption 复用对话 LLM API（从 dashboard_config 读取配置），不单独部署模型
