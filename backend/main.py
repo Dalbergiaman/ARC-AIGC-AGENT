@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from api.routes.dashboard import router as dashboard_router
+from api.routes.upload import router as upload_router
 from config import settings
 from models.database import engine
 from models.schemas import Base
@@ -19,6 +20,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AIGC Agent", lifespan=lifespan)
 app.include_router(dashboard_router)
+app.include_router(upload_router)
 
 
 @app.get("/health")

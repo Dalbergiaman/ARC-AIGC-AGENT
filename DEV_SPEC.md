@@ -983,30 +983,28 @@ backend/tests/
 > - `images=None` 时调用 `ainvoke`
 > - `images` 非空时调用 `ainvoke_with_vision`
 
-**B-2 图像生成客户端**
+**B-2 文件存储模块**
+
+- [x] 编写 `backend/services/storage_service.py`（`STORAGE=local` 时写 `backend/uploads/`，返回 `/static/uploads/{uuid}.ext`；`STORAGE=minio` 时上传 MinIO）
+- [x] 在 `main.py` 挂载 `/static` 静态文件目录（开发环境）
+- [x] 编写 `backend/api/routes/upload.py`（`POST /api/upload`，返回 `{file_id, url}`）
+
+> ⚠️ 注意：上传文件需校验 MIME 类型，只允许 `image/jpeg` / `image/png` / `image/webp`，防止上传非图片文件。
+
+**B-3 图像生成客户端**
 
 - [ ] 编写 `core/image/base.py`（`ImageGeneratorBase` 抽象基类 + `GenerationRequest` / `GenerationResult` dataclass）
 - [ ] 编写 `core/image/factory.py`（`ImageGeneratorFactory`，注册 bailian / volcengine / openrouter）
-- [ ] 编写 `core/image/bailian_client.py`（httpx，提交任务拿 `task_id` → 轮询 `/api/v1/tasks/{task_id}` 直到 `SUCCEEDED`，轮询间隔 3s，超时 120s）
-- [ ] 编写 `core/image/volcengine_client.py`（httpx，同步返回，从 `data[0].url` 取图片 URL）
-- [ ] 编写 `core/image/openrouter_client.py`（httpx，从 `choices[0].message.images[0]` 取 base64，上传到 `storage_service` 后返回 URL）
+- [ ] 编写 `core/image/bailian_client.py`（httpx，提交任务拿 `task_id` → 轮询 `/api/v1/tasks/{task_id}` 直到 `SUCCEEDED`，轮询间隔 3s，超时 120s，不做内部重试）
+- [ ] 编写 `core/image/volcengine_client.py`（httpx，同步返回，从 `data[0].url` 取图片 URL，不做内部重试）
+- [ ] 编写 `core/image/openrouter_client.py`（httpx，从 `choices[0].message.images[0]` 取 base64，上传到 `storage_service` 后返回 URL，不做内部重试）
 - [ ] 编写 `core/image/generator.py`（`ImageGenerator` 调度器，从 dashboard.yaml 读取平台配置）
-- [ ] 配置 Celery（`backend/celery_app.py`，broker=Redis，result_backend=Redis）
-- [ ] 编写 Celery task `generate_image_task`，内部调用 `ImageGenerator.generate()`
 
-> ⚠️ 注意：百炼图像生成是异步任务制，轮询逻辑封装在客户端内部，对外暴露同步接口。OpenRouter 返回 base64，需先上传到本地存储再返回 URL，不能直接把 base64 传给前端。
+> ⚠️ 注意：三个客户端均不做内部重试，失败直接抛异常，由 Agent 的 `retry_count` 机制控制重试。百炼图像生成是异步任务制，轮询逻辑封装在客户端内部，对外暴露同步接口。OpenRouter 返回 base64，需先上传到 `storage_service` 再返回 URL，依赖 B-2 先完成。
 
 > 🧪 测试：`tests/core/image/test_factory.py`
 > - 注册的 provider 能正确实例化
 > - 未知 provider 抛异常
-
-**B-3 文件存储模块**
-
-- [ ] 编写 `backend/services/storage_service.py`（`STORAGE=local` 时写 `backend/uploads/`，返回 `/static/uploads/{uuid}.ext`；`STORAGE=minio` 时上传 MinIO）
-- [ ] 在 `main.py` 挂载 `/static` 静态文件目录（开发环境）
-- [ ] 编写 `backend/api/routes/upload.py`（`POST /api/upload`，返回 `{file_id, url}`）
-
-> ⚠️ 注意：上传文件需校验 MIME 类型，只允许 `image/jpeg` / `image/png` / `image/webp`，防止上传非图片文件。
 
 **B-4 Embedding 客户端（image-rag-mcp）**
 
@@ -1045,6 +1043,8 @@ backend/tests/
 
 - [ ] 补充 `agent/prompts.py`（`enhance_prompt_system` / `refine_prompt_system`）
 - [ ] 编写 `agent/tools/prompt_builder.py`（`enhance_prompt`：调用 LLM 生成结构化提示词；`refine_prompt`：根据 `EvaluationResult` 各维度分数针对性修正）
+- [ ] 配置 Celery（`backend/celery_app.py`，broker=Redis，result_backend=Redis）
+- [ ] 编写 Celery task `generate_image_task`，内部调用 `ImageGenerator.generate()`
 - [ ] 编写 `agent/tools/image_generator.py`（`generate_image`：提交 Celery 任务，轮询 Redis，超时计入 `retry_count`，推送 `generation_start` / `generation_done` SSE 事件）
 - [ ] 将工具挂入 Graph
 
@@ -1152,9 +1152,10 @@ backend/tests/
 
 ## 当前状态
 
-**阶段**：A-1 ~ A-4、B-1 已完成，当前进入 B-2（图像生成客户端）
+**阶段**：A-1 ~ A-4、B-1、B-2 已完成，当前进入 B-3（图像生成客户端）
 
 **最近决策记录**：
+- 2026-05-01：完成 B-2 文件存储模块：新增 `storage_service.py` 与 `POST /api/upload`，上传仅接收二进制文件（multipart/form-data），MIME 白名单 `jpeg/png/webp`；本地存储路径为 `backend/uploads`，返回 `/static/uploads/{filename}`；`STORAGE=minio` 分支暂抛 `NotImplementedError`，避免静默失败。
 - 2026-05-01：完成 B-1 LLM 客户端：httpx.AsyncClient 统一调用，公共逻辑提取到 `_base_http_client.py`，两个平台客户端只声明 endpoint；内部重试 2 次；`astream` 手动解析 SSE；`LLMClient` 调度器按 images 是否为空路由到 `ainvoke` 或 `ainvoke_with_vision`；后续支持 prompt cache 时通过 `_extra_payload()` hook 在各子类 override，无需重构。
 - 2026-05-01：完成 A-4 Dashboard 配置模块：后端新增 `dashboard_service.py` 与 `dashboard.py` 路由（`GET/PUT /api/dashboard/config`、`GET /api/dashboard/providers`）；`PUT /config` 改为严格字段校验（仅允许 llm/image_provider/langfuse 及其定义字段），并采用部分更新（merge patch）；前端 Dashboard 调整为左侧导航（Model Config / Langfuse）+ 独立参数块（LLM、Image Provider、Langfuse）+ 顶部返回主界面按钮。
 - 2026-05-01：完成 A-3 前端初始化：创建 Next.js（App Router + TypeScript + Tailwind）项目，接入 shadcn/ui 与 zustand，落地 `/`、`/chat/[sessionId]`、`/dashboard` 基础路由；开发环境端口改为 3001，前端通过 `next.config.ts` rewrites 代理 `/api/*` 到 `http://localhost:8000/api/*`
