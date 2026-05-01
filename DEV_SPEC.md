@@ -967,11 +967,11 @@ backend/tests/
 
 **B-1 LLM 客户端**
 
-- [ ] 编写 `core/llm/base.py`（`LLMClientBase` 抽象基类，定义 `ainvoke` / `ainvoke_with_vision` / `astream` 三个方法）
-- [ ] 编写 `core/llm/bailian_client.py`（httpx 调用百炼 `/compatible-mode/v1/chat/completions`，图片放 `content[].image_url`）
-- [ ] 编写 `core/llm/volcengine_client.py`（httpx 调用豆包 `/api/v3/chat/completions`，格式同上）
-- [ ] 编写 `core/llm/factory.py`（`LLMClientFactory`，注册 bailian / volcengine）
-- [ ] 编写 `core/llm/client.py`（`LLMClient` 调度器，从 `dashboard_service` 读取配置，有图片时路由到 `ainvoke_with_vision`）
+- [x] 编写 `core/llm/base.py`（`LLMClientBase` 抽象基类，定义 `ainvoke` / `ainvoke_with_vision` / `astream` 三个方法）
+- [x] 编写 `core/llm/bailian_client.py`（httpx 调用百炼 `/compatible-mode/v1/chat/completions`，图片放 `content[].image_url`）
+- [x] 编写 `core/llm/volcengine_client.py`（httpx 调用豆包 `/api/v3/chat/completions`，格式同上）
+- [x] 编写 `core/llm/factory.py`（`LLMClientFactory`，注册 bailian / volcengine）
+- [x] 编写 `core/llm/client.py`（`LLMClient` 调度器，从 `dashboard_service` 读取配置，有图片时路由到 `ainvoke_with_vision`）
 
 > ⚠️ 注意：两个平台的 `model` 字段名称不同，百炼用 `qwen-vl-max`，豆包用具体的 endpoint model id，需从 dashboard.yaml 的 `model` 字段读取，不要硬编码。
 
@@ -1152,9 +1152,10 @@ backend/tests/
 
 ## 当前状态
 
-**阶段**：A-1、A-2、A-3、A-4 已完成，当前进入 B-1（LLM 客户端）
+**阶段**：A-1 ~ A-4、B-1 已完成，当前进入 B-2（图像生成客户端）
 
 **最近决策记录**：
+- 2026-05-01：完成 B-1 LLM 客户端：httpx.AsyncClient 统一调用，公共逻辑提取到 `_base_http_client.py`，两个平台客户端只声明 endpoint；内部重试 2 次；`astream` 手动解析 SSE；`LLMClient` 调度器按 images 是否为空路由到 `ainvoke` 或 `ainvoke_with_vision`；后续支持 prompt cache 时通过 `_extra_payload()` hook 在各子类 override，无需重构。
 - 2026-05-01：完成 A-4 Dashboard 配置模块：后端新增 `dashboard_service.py` 与 `dashboard.py` 路由（`GET/PUT /api/dashboard/config`、`GET /api/dashboard/providers`）；`PUT /config` 改为严格字段校验（仅允许 llm/image_provider/langfuse 及其定义字段），并采用部分更新（merge patch）；前端 Dashboard 调整为左侧导航（Model Config / Langfuse）+ 独立参数块（LLM、Image Provider、Langfuse）+ 顶部返回主界面按钮。
 - 2026-05-01：完成 A-3 前端初始化：创建 Next.js（App Router + TypeScript + Tailwind）项目，接入 shadcn/ui 与 zustand，落地 `/`、`/chat/[sessionId]`、`/dashboard` 基础路由；开发环境端口改为 3001，前端通过 `next.config.ts` rewrites 代理 `/api/*` 到 `http://localhost:8000/api/*`
 - 2026-04-30：确定使用 LangGraph 搭建 Agent，替代原方案中的自定义 architect_agent.py
