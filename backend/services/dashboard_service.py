@@ -15,6 +15,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "image_provider": {
         "provider": "bailian",
+        "model": "wan2.7-image-pro",
         "api_key": "",
     },
     "langfuse": {
@@ -38,9 +39,17 @@ PROVIDERS: dict[str, Any] = {
         },
     ],
     "image_provider": [
-        {"id": "bailian", "label": "Bailian"},
-        {"id": "volcengine", "label": "Volcengine"},
-        {"id": "openrouter", "label": "OpenRouter"},
+        {"id": "bailian", "label": "Bailian", "models": ["wanx2.1-t2i-turbo"]},
+        {
+            "id": "volcengine",
+            "label": "Volcengine",
+            "models": ["doubao-seedream-3-0-t2i-250415"],
+        },
+        {
+            "id": "openrouter",
+            "label": "OpenRouter",
+            "models": ["google/gemini-2.5-flash-image-preview"],
+        },
     ],
 }
 

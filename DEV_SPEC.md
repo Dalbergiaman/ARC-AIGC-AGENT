@@ -19,7 +19,7 @@
 | Agent 框架 | LangGraph |
 | MCP 框架 | FastMCP（`mcp.server.fastmcp`，官方 mcp 库内置） |
 | 对话模型 | 百炼（Qwen3-VL）/ 火山引擎豆包 VLM，Dashboard 可切换，支持视觉理解 |
-| 图像生成 | 云端 API：阿里云百炼（万相）/ 火山引擎（即梦）/ OpenRouter |
+| 图像生成 | 云端 API：阿里云百炼（万相）/ 火山引擎（即梦）/ GrsAI |
 | 数据库 | PostgreSQL + SQLAlchemy |
 | LangGraph Checkpointer | PostgreSQL（langgraph-checkpoint-postgres） |
 | 任务队列 | Celery + Redis |
@@ -46,7 +46,7 @@ FastAPI 后端 (Python)
     └── 文件存储模块
          │
          ├── VLM（百炼 Qwen3-VL / 火山引擎豆包 VLM，视觉理解）
-         ├── 图像生成（云端 API：百炼 / 豆包 / OpenRouter）
+         ├── 图像生成（云端 API：百炼 / 豆包 / GrsAI）
          └── 对象存储（本地 / MinIO / S3）
 ```
 
@@ -89,7 +89,7 @@ aigc_agent/
 │   │   │   └── ResultGallery.tsx
 │   │   └── dashboard/
 │   │       ├── ModelSelector.tsx       # 对话模型选择（百炼/火山引擎 VLM）
-│   │       ├── ImageProviderConfig.tsx # 图像生成平台配置（百炼万相/火山即梦/OpenRouter）
+│   │       ├── ImageProviderConfig.tsx # 图像生成平台配置（百炼万相/火山即梦/GrsAI）
 │   │       └── ApiKeyForm.tsx          # API Key 填写与保存
 │   ├── hooks/
 │   │   ├── useChat.ts
@@ -139,7 +139,7 @@ aigc_agent/
     │       ├── factory.py              # ImageGeneratorFactory
     │       ├── bailian_client.py       # 阿里云百炼（Qwen）客户端
     │       ├── volcengine_client.py    # 火山引擎豆包客户端
-    │       └── openrouter_client.py    # OpenRouter 客户端
+    │       └── grsai_client.py         # GrsAI 客户端
     ├── services/
     │   ├── session_service.py
     │   ├── message_service.py
@@ -305,13 +305,13 @@ class DesignState(TypedDict):
 
 ### 选型结论：httpx 统一 POST
 
-三个平台 API 格式差异大，openai 库只能覆盖 OpenRouter，无法统一。使用 httpx 异步客户端统一调用，配合抽象工厂模式封装差异。
+三个平台 API 格式差异大，使用 httpx 异步客户端统一调用，配合抽象工厂模式封装差异。
 
 | 平台 | Endpoint | 格式 | OpenAI 兼容 |
 |------|----------|------|------------|
 | 阿里云百炼（万相） | `POST /api/v1/services/aigc/text2image/image-synthesis` | 异步任务制（提交→轮询） | 否，DashScope 私有格式 |
 | 火山引擎豆包 | `POST /api/v3/images/generations` | 类 OpenAI images 格式 | 部分兼容 |
-| OpenRouter | `POST /api/v1/chat/completions` | Chat Completions + `modalities: ["image"]` | 是，但走 chat 接口 |
+| GrsAI | `POST /v1/draw/completions`（`https://grsai.dakka.com.cn`） | 同步返回，响应从 `results[0].url` 取图片 URL | 否，私有格式 |
 
 ### 抽象工厂结构
 
@@ -322,7 +322,7 @@ core/image/
 ├── generator.py     # 调度器，从 dashboard_config 读取当前平台后调用工厂
 ├── bailian_client.py
 ├── volcengine_client.py
-└── openrouter_client.py
+└── grsai_client.py
 ```
 
 **统一数据结构**
@@ -362,12 +362,12 @@ class ImageGeneratorFactory:
     _registry = {
         "bailian": BailianClient,
         "volcengine": VolcengineClient,
-        "openrouter": OpenRouterClient,
+        "grsai": GrsaiClient,
     }
 
     @classmethod
-    def create(cls, provider: str, api_key: str) -> ImageGeneratorBase:
-        return cls._registry[provider](api_key)
+    def create(cls, provider: str, api_key: str, model: str) -> ImageGeneratorBase:
+        return cls._registry[provider](api_key=api_key, model=model)
 ```
 
 ### 三个客户端的核心差异
@@ -378,8 +378,8 @@ class ImageGeneratorFactory:
 **豆包（`volcengine_client.py`）**
 同步返回，直接 POST 拿结果，响应结构类似 OpenAI images API，从 `data[0].url` 取图片 URL。
 
-**OpenRouter（`openrouter_client.py`）**
-走 chat completions 接口，`modalities: ["image"]`，响应从 `choices[0].message.images[0]` 取 base64 图片数据，需上传到存储服务后返回 URL。
+**GrsAI（`grsai_client.py`）**
+同步返回，POST 到 `https://grsai.dakka.com.cn/v1/draw/completions`，支持 `gpt-image` 和 `nano-banana` 两个模型系列，响应从 `results[0].url` 取图片 URL。构造器接收 `model` 参数，根据模型名称自动选择 endpoint 和 payload 格式。
 
 ### 调度器
 
@@ -806,7 +806,7 @@ llm:
   api_key: sk-xxx
 
 image_provider:
-  provider: bailian        # bailian | volcengine | openrouter
+  provider: bailian        # bailian | volcengine | grsai
   api_key: sk-xxx
 
 langfuse:
@@ -993,14 +993,14 @@ backend/tests/
 
 **B-3 图像生成客户端**
 
-- [ ] 编写 `core/image/base.py`（`ImageGeneratorBase` 抽象基类 + `GenerationRequest` / `GenerationResult` dataclass）
-- [ ] 编写 `core/image/factory.py`（`ImageGeneratorFactory`，注册 bailian / volcengine / openrouter）
-- [ ] 编写 `core/image/bailian_client.py`（httpx，提交任务拿 `task_id` → 轮询 `/api/v1/tasks/{task_id}` 直到 `SUCCEEDED`，轮询间隔 3s，超时 120s，不做内部重试）
-- [ ] 编写 `core/image/volcengine_client.py`（httpx，同步返回，从 `data[0].url` 取图片 URL，不做内部重试）
-- [ ] 编写 `core/image/openrouter_client.py`（httpx，从 `choices[0].message.images[0]` 取 base64，上传到 `storage_service` 后返回 URL，不做内部重试）
-- [ ] 编写 `core/image/generator.py`（`ImageGenerator` 调度器，从 dashboard.yaml 读取平台配置）
+- [x] 编写 `core/image/base.py`（`ImageGeneratorBase` 抽象基类 + `GenerationRequest` / `GenerationResult` dataclass）
+- [x] 编写 `core/image/factory.py`（`ImageGeneratorFactory`，注册 bailian / volcengine / grsai）
+- [x] 编写 `core/image/bailian_client.py`（httpx，提交任务拿 `task_id` → 轮询 `/api/v1/tasks/{task_id}` 直到 `SUCCEEDED`，轮询间隔 3s，超时 120s，不做内部重试）
+- [x] 编写 `core/image/volcengine_client.py`（httpx，同步返回，从 `data[0].url` 取图片 URL，不做内部重试）
+- [x] 编写 `core/image/grsai_client.py`（httpx，同步返回，POST 到 `https://grsai.dakka.com.cn/v1/draw/completions`，从 `results[0].url` 取图片 URL，支持 `gpt-image` / `nano-banana` 模型，不做内部重试）
+- [x] 编写 `core/image/generator.py`（`ImageGenerator` 调度器，从 dashboard.yaml 读取平台配置）
 
-> ⚠️ 注意：三个客户端均不做内部重试，失败直接抛异常，由 Agent 的 `retry_count` 机制控制重试。百炼图像生成是异步任务制，轮询逻辑封装在客户端内部，对外暴露同步接口。OpenRouter 返回 base64，需先上传到 `storage_service` 再返回 URL，依赖 B-2 先完成。
+> ⚠️ 注意：三个客户端均不做内部重试，失败直接抛异常，由 Agent 的 `retry_count` 机制控制重试。百炼图像生成是异步任务制，轮询逻辑封装在客户端内部，对外暴露同步接口。GrsAI 工厂的 `create` 方法需额外传入 `model` 参数。
 
 > 🧪 测试：`tests/core/image/test_factory.py`
 > - 注册的 provider 能正确实例化
@@ -1152,9 +1152,10 @@ backend/tests/
 
 ## 当前状态
 
-**阶段**：A-1 ~ A-4、B-1、B-2 已完成，当前进入 B-3（图像生成客户端）
+**阶段**：A-1 ~ A-4、B-1 ~ B-3 已完成，当前进入 B-4（Embedding 客户端）
 
 **最近决策记录**：
+- 2026-05-04：B-3 图像生成客户端：用 GrsAI（`grsai_client.py`）替换 OpenRouter，GrsAI 同步返回图片 URL（`results[0].url`），支持 `gpt-image` / `nano-banana` 模型，工厂 `create` 方法新增 `model` 参数。
 - 2026-05-01：完成 B-2 文件存储模块：新增 `storage_service.py` 与 `POST /api/upload`，上传仅接收二进制文件（multipart/form-data），MIME 白名单 `jpeg/png/webp`；本地存储路径为 `backend/uploads`，返回 `/static/uploads/{filename}`；`STORAGE=minio` 分支暂抛 `NotImplementedError`，避免静默失败。
 - 2026-05-01：完成 B-1 LLM 客户端：httpx.AsyncClient 统一调用，公共逻辑提取到 `_base_http_client.py`，两个平台客户端只声明 endpoint；内部重试 2 次；`astream` 手动解析 SSE；`LLMClient` 调度器按 images 是否为空路由到 `ainvoke` 或 `ainvoke_with_vision`；后续支持 prompt cache 时通过 `_extra_payload()` hook 在各子类 override，无需重构。
 - 2026-05-01：完成 A-4 Dashboard 配置模块：后端新增 `dashboard_service.py` 与 `dashboard.py` 路由（`GET/PUT /api/dashboard/config`、`GET /api/dashboard/providers`）；`PUT /config` 改为严格字段校验（仅允许 llm/image_provider/langfuse 及其定义字段），并采用部分更新（merge patch）；前端 Dashboard 调整为左侧导航（Model Config / Langfuse）+ 独立参数块（LLM、Image Provider、Langfuse）+ 顶部返回主界面按钮。
@@ -1162,7 +1163,7 @@ backend/tests/
 - 2026-04-30：确定使用 LangGraph 搭建 Agent，替代原方案中的自定义 architect_agent.py
 - 2026-04-30：记忆系统分为短期/工作/参考图/长期四个层次
 - 2026-04-30：图像生成使用 Celery 异步队列，前端轮询状态
-- 2026-04-30：图像生成服务选用云端 API，支持三个平台：阿里云百炼（Qwen）、火山引擎豆包、OpenRouter
+- 2026-04-30：图像生成服务选用云端 API，支持三个平台：阿里云百炼（Qwen）、火山引擎豆包、GrsAI
 - 2026-04-30：不做用户登录系统，改为 Dashboard 页面供用户配置模型和 API Key
 - 2026-04-30：LangGraph checkpointer 使用 PostgreSQL（langgraph-checkpoint-postgres）
 - 2026-04-30：Langfuse 使用 Docker 自部署，纳入 docker-compose.yml

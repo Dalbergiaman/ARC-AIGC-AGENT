@@ -1,3 +1,4 @@
+from base64 import b64decode
 from pathlib import Path
 from uuid import uuid4
 
@@ -21,21 +22,38 @@ def _suffix_from_content_type(content_type: str) -> str:
     return ".webp"
 
 
+def _ensure_local_upload_dir() -> Path:
+    upload_dir = Path(settings.UPLOAD_DIR)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    return upload_dir
+
+
+def _save_bytes(content: bytes, suffix: str) -> tuple[str, str]:
+    upload_dir = _ensure_local_upload_dir()
+    file_id = str(uuid4())
+    filename = f"{file_id}{suffix}"
+    file_path = upload_dir / filename
+    file_path.write_bytes(content)
+    return file_id, f"/static/uploads/{filename}"
+
+
 async def save_upload(file: UploadFile) -> tuple[str, str]:
     validate_image_mime_type(file.content_type)
 
     if settings.STORAGE == "minio":
         raise NotImplementedError("MinIO storage is not implemented yet")
 
-    upload_dir = Path(settings.UPLOAD_DIR)
-    upload_dir.mkdir(parents=True, exist_ok=True)
-
-    file_id = str(uuid4())
-    suffix = _suffix_from_content_type(file.content_type or "")
-    filename = f"{file_id}{suffix}"
-    file_path = upload_dir / filename
-
     content = await file.read()
-    file_path.write_bytes(content)
+    suffix = _suffix_from_content_type(file.content_type or "")
+    return _save_bytes(content, suffix)
 
-    return file_id, f"/static/uploads/{filename}"
+
+def save_generated_image_base64(base64_data: str, content_type: str = "image/png") -> str:
+    validate_image_mime_type(content_type)
+
+    if settings.STORAGE == "minio":
+        raise NotImplementedError("MinIO storage is not implemented yet")
+
+    raw = b64decode(base64_data)
+    _, url = _save_bytes(raw, _suffix_from_content_type(content_type))
+    return url

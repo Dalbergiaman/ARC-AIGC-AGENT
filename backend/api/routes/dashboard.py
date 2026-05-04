@@ -21,6 +21,7 @@ class ImageProviderConfigPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: str | None = None
+    model: str | None = None
     api_key: str | None = None
 
 
