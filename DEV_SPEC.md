@@ -1160,12 +1160,13 @@ backend/tests/
 
 **C-4 Prompt 构建与图像生成工具**
 
-- [ ] 补充 `agent/prompts.py`（`enhance_prompt_system` / `refine_prompt_system`）
-- [ ] 编写 `agent/tools/prompt_builder.py`（`enhance_prompt`：调用 LLM 生成结构化提示词；`refine_prompt`：根据 `EvaluationResult` 各维度分数针对性修正；输出用 Pydantic schema 校验）
-- [ ] 配置 Celery（`backend/celery_app.py`，broker=Redis，result_backend=Redis）
-- [ ] 编写 Celery task `generate_image_task`，内部调用 `ImageGenerator.generate()`
-- [ ] 编写 `agent/tools/image_generator.py`（`generate_image`：提交 Celery 任务，轮询 Redis result backend 与 `cancel:{session_id}:{run_id}`，超时计入当前生成任务 `retry_count`，推送 `generation_start` / `generation_done` SSE 事件）
-- [ ] 将 `enhance_prompt` / `generate_image` / `refine_prompt` 接入确定性生成子流程，不交给 Agent 自由调用
+- [x] `agent/prompts.py` 已在 C-3 补充 `enhance_prompt_system` / `refine_prompt_system`
+- [x] 编写 `agent/tools/prompt_builder.py`（`enhance_prompt` / `refine_prompt`，Pydantic `EnhancedPrompt` 校验，解析失败重试 1 次，仍失败走 fallback）
+- [x] 配置 Celery（`backend/celery_app.py`，broker=Redis，result_backend=Redis，方案 A：asyncio.run 包装）
+- [x] 编写 `tasks/image_task.py`（`generate_image_task`，内部调用 `ImageGenerator.generate()`）
+- [x] 编写 `agent/tools/image_generator.py`（`generate_image`：提交 Celery 任务，asyncio 轮询 Redis result backend 与 `cancel:{session_id}:{run_id}`，超时抛 TimeoutError，取消抛 CancelledError；`SSEEmitter` 协议 + `NullEmitter` 占位，C-6 注入真实 emitter）
+- [x] 将三个工具接入确定性生成子流程节点（`enhance_prompt_node` / `generate_image_node` / `refine_prompt_node`）
+- [x] `AgentState` 新增 `_enhanced_prompt` / `_current_gen_result` 内部传递字段
 
 > ⚠️ 注意：`generate_image` 工具内部是 async 轮询，需用 `asyncio.sleep` 而非 `time.sleep`，否则会阻塞 FastAPI 事件循环。
 
@@ -1271,6 +1272,7 @@ backend/tests/
 **阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成，当前进入 C 阶段（Agent 核心）
 
 **最近决策记录**：
+- 2026-05-05：C-4 完成：prompt_builder（EnhancedPrompt Pydantic 校验，失败重试 1 次后 fallback）；Celery 方案 A（asyncio.run 包装，迁移方案 B 只改 task 装饰器）；image_generator 引入 SSEEmitter 协议 + NullEmitter 占位，C-6 注入真实 emitter，测试可用 MockEmitter；AgentState 新增 `_enhanced_prompt` / `_current_gen_result` 内部传递字段。
 - 2026-05-05：C-3 完成：`StyleKeywords` 新增 `description` 字段（2-3 句风格说明，供 `enhance_prompt` LLM 参考），与 `mood`（一句话氛围，供 agent 对话）和 `positive`/`negative`（直接拼入图像生成 prompt）分工明确；`agent_node` 工具调用改为规则驱动（有图片 URL → 分析，有风格 → 查关键词），不使用 LLM bind_tools；`rag_gate_node` 按规则调用 `search_similar_cases`。
 - 2026-05-05：C-1/C-2 完成：会话与消息 API（session_service / message_service / session 路由）；Agent 状态层全部子结构（ReferenceImageAnalysis / GenerationResult / EvaluationResult / ImageRecord）从 @dataclass 改为 TypedDict，确保 LangGraph checkpointer JSON 序列化兼容；AgentState 继承 MessagesState（带 add_messages reducer 的 TypedDict）；checkpointer 生命周期改为 FastAPI lifespan async with 管理，graph 在 lifespan 内编译后存入 app.state.graph；安装 langgraph-checkpoint-postgres 3.0.5 + psycopg[binary,pool]。
 - 2026-05-05：Agent 架构优化：从”纯 ReAct 自由调用完整生成链路”调整为”agent 决策节点 + rag_gate + 确定性生成子流程”；图像生成、评估、重试由 Graph 控制，`retry_count` 仅作用于当前生成任务；新增 `turn_id` / `run_id` / `phase` / `current_task_id` / `best_generation_result` / `last_search_signature` 等运行态字段；用户中断从内存 `cancel_event` 调整为 Redis cancel flag（`cancel:{session_id}:{run_id}`）；RAG 触发从完全自主决策改为规则门控；MCP 只向 Agent 暴露检索工具，`store_generated_image` 仅由 `POST /api/library/store` 直接调用。

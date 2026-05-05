@@ -19,6 +19,8 @@ from agent.state_utils import (
     update_completeness,
 )
 from agent.tools.image_analysis import analyze_reference_image
+from agent.tools.image_generator import NullEmitter, generate_image
+from agent.tools.prompt_builder import EnhancedPrompt, enhance_prompt, refine_prompt
 from agent.tools.style_lookup import lookup_style_keywords
 from agent.tools.search_library import search_similar_cases
 from core.llm.client import LLMClient
@@ -137,24 +139,6 @@ async def agent_node(state: AgentState) -> dict:
 
     return result
 
-    design_state = update_completeness(design_state)
-
-    ready = bool(data.get("ready_to_generate", False))
-    phase = data.get("phase", "collecting")
-    reply = data.get("reply", "")
-
-    result: dict = {
-        "design_state": design_state,
-        "messages": [AIMessage(content=reply)] if reply else [],
-        "phase": phase,
-        "ready_to_generate": ready,
-    }
-
-    if ready:
-        result.update(reset_generation_run(state))
-
-    return result
-
 
 async def rag_gate_node(state: AgentState) -> dict:
     """Rule-based gate: calls search_similar_cases when conditions are met.
@@ -193,26 +177,69 @@ async def rag_gate_node(state: AgentState) -> dict:
 
 
 async def enhance_prompt_node(state: AgentState) -> dict:
-    """Build the image generation prompt from DesignState + similar cases.
+    """Build the image generation prompt from DesignState + similar cases."""
+    design_state = dict(state.get("design_state") or {})
+    reference_images = list(state.get("reference_images") or [])
+    similar_cases = list(state.get("similar_cases") or [])
 
-    Stub: returns placeholder. Will call enhance_prompt tool in C-4.
-    """
-    return {"phase": "generating"}
+    enhanced = await enhance_prompt(
+        design_state=design_state,
+        reference_analysis=reference_images,
+        similar_cases=similar_cases,
+    )
+
+    return {
+        "phase": "generating",
+        "_enhanced_prompt": enhanced,  # passed to generate_image_node via state
+    }
 
 
 async def generate_image_node(state: AgentState) -> dict:
-    """Submit Celery task and poll for result.
+    """Submit Celery task and poll for result."""
+    enhanced_prompt: EnhancedPrompt | None = state.get("_enhanced_prompt")
+    if enhanced_prompt is None:
+        # Fallback: build a minimal prompt from design_state
+        design_state = dict(state.get("design_state") or {})
+        enhanced_prompt = EnhancedPrompt(
+            prompt=", ".join(filter(None, [
+                design_state.get("building_type", ""),
+                design_state.get("style", ""),
+                "architectural rendering, high quality",
+            ])),
+            negative_prompt="blurry, distorted, watermark, low quality",
+        )
 
-    Stub: returns placeholder. Will call generate_image tool in C-4.
-    """
-    return {"phase": "evaluating"}
+    retry_count = state.get("retry_count", 0)
+    best = state.get("best_generation_result")
+
+    try:
+        gen_result = await generate_image(
+            state=state,
+            enhanced_prompt=enhanced_prompt,
+            emitter=None,  # C-6 will inject real SSEEmitter
+        )
+    except TimeoutError:
+        return {
+            "retry_count": retry_count + 1,
+            "phase": "evaluating",
+        }
+    except asyncio.CancelledError:
+        return {"phase": "interrupted"}
+
+    generation_results = list(state.get("generation_results") or [])
+    generation_results.append(gen_result)
+
+    return {
+        "generation_results": generation_results,
+        "phase": "evaluating",
+        "_current_gen_result": gen_result,
+    }
 
 
 async def evaluate_image_node(state: AgentState) -> dict:
     """Evaluate the generated image with VLM.
 
-    Stub: returns a passing score so the graph exits cleanly.
-    Will call evaluate_generated_image tool in C-5.
+    Stub: returns a passing score. Will call evaluate_generated_image in C-5.
     """
     stub_eval: EvaluationResult = {
         "score": 0.9,
@@ -224,15 +251,33 @@ async def evaluate_image_node(state: AgentState) -> dict:
         "reference_score": None,
         "feedback": "stub evaluation",
     }
-    return {"last_evaluation": stub_eval, "phase": "done"}
+    gen_result = state.get("_current_gen_result")
+    best = state.get("best_generation_result")
+    if gen_result:
+        scored = {**gen_result, "score": stub_eval["score"]}
+        if best is None or scored["score"] > best.get("score", 0):
+            best = scored
+
+    return {"last_evaluation": stub_eval, "best_generation_result": best, "phase": "done"}
 
 
 async def refine_prompt_node(state: AgentState) -> dict:
-    """Refine the prompt based on evaluation feedback.
+    """Refine the prompt based on evaluation feedback."""
+    enhanced_prompt: EnhancedPrompt | None = state.get("_enhanced_prompt")
+    evaluation: EvaluationResult | None = state.get("last_evaluation")
 
-    Stub: pass-through. Will call refine_prompt tool in C-5.
-    """
-    return {}
+    if enhanced_prompt is None or evaluation is None:
+        return {}
+
+    refined = await refine_prompt(
+        original_prompt=enhanced_prompt,
+        evaluation=evaluation,
+    )
+
+    return {
+        "_enhanced_prompt": refined,
+        "retry_count": state.get("retry_count", 0) + 1,
+    }
 
 
 # ---------------------------------------------------------------------------

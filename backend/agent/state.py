@@ -81,6 +81,9 @@ class AgentState(MessagesState):
     phase: Literal["collecting", "generating", "evaluating", "interrupted", "done"]
     turn_id: str
     run_id: str
+    # Internal fields passed between generation sub-flow nodes (not persisted long-term)
+    _enhanced_prompt: dict | None
+    _current_gen_result: GenerationResult | None
 
 
 def default_agent_state() -> dict:
@@ -113,4 +116,6 @@ def default_agent_state() -> dict:
         "phase": "collecting",
         "turn_id": "",
         "run_id": "",
+        "_enhanced_prompt": None,
+        "_current_gen_result": None,
     }
