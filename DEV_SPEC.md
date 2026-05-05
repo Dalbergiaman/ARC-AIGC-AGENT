@@ -1151,11 +1151,12 @@ backend/tests/
 
 **C-3 信息收集工具**
 
-- [ ] 编写 `agent/prompts.py`（`agent_system` / `analyze_image_system` / `lookup_style_system` 三个 Prompt 函数）
-- [ ] 编写 `agent/tools/image_analysis.py`（`analyze_reference_image`：调用 `LLMClient.ainvoke_with_vision`，返回 `ReferenceImageAnalysis`）
-- [ ] 编写 `agent/tools/style_lookup.py`（`lookup_style_keywords`：从 `prompt_templates.py` 查询风格关键词，纯本地查询，无 LLM 调用）
-- [ ] 编写 `agent/tools/search_library.py`（`search_similar_cases`：通过 MCP `search_by_text` 检索，结果存入 `AgentState.similar_cases`；受 `rag_gate` 控制）
-- [ ] 将三个轻量工具挂入 Graph，手动测试工具调用
+- [x] 编写 `agent/prompts.py`（`agent_system` / `analyze_image_system` / `lookup_style_system` / `enhance_prompt_system` / `evaluate_image_system` / `refine_prompt_system` 全部 Prompt 函数，结构化指令风格）
+- [x] 编写 `agent/tools/prompt_templates.py`（9 种建筑风格关键词库，每种风格含 `positive` / `negative` / `mood` / `description` 四个字段；`description` 为 2-3 句风格说明，供 `enhance_prompt` LLM 参考；`positive`/`negative` 直接拼入图像生成 prompt）
+- [x] 编写 `agent/tools/image_analysis.py`（`analyze_reference_image`：调用 `LLMClient.ainvoke_with_vision`，返回 `ReferenceImageAnalysis` dict）
+- [x] 编写 `agent/tools/style_lookup.py`（`lookup_style_keywords`：从 `prompt_templates.py` 查询风格关键词，纯本地查询，无 LLM 调用）
+- [x] 编写 `agent/tools/search_library.py`（`search_similar_cases`：stub，D-4 接入 MCP）
+- [x] 工具按规则显式挂入 Graph：`agent_node` 内按规则调用（有图片 URL → 分析图片，有风格 → 查关键词）；`rag_gate_node` 按规则调用 `search_similar_cases`
 
 **C-4 Prompt 构建与图像生成工具**
 
@@ -1270,6 +1271,7 @@ backend/tests/
 **阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成，当前进入 C 阶段（Agent 核心）
 
 **最近决策记录**：
+- 2026-05-05：C-3 完成：`StyleKeywords` 新增 `description` 字段（2-3 句风格说明，供 `enhance_prompt` LLM 参考），与 `mood`（一句话氛围，供 agent 对话）和 `positive`/`negative`（直接拼入图像生成 prompt）分工明确；`agent_node` 工具调用改为规则驱动（有图片 URL → 分析，有风格 → 查关键词），不使用 LLM bind_tools；`rag_gate_node` 按规则调用 `search_similar_cases`。
 - 2026-05-05：C-1/C-2 完成：会话与消息 API（session_service / message_service / session 路由）；Agent 状态层全部子结构（ReferenceImageAnalysis / GenerationResult / EvaluationResult / ImageRecord）从 @dataclass 改为 TypedDict，确保 LangGraph checkpointer JSON 序列化兼容；AgentState 继承 MessagesState（带 add_messages reducer 的 TypedDict）；checkpointer 生命周期改为 FastAPI lifespan async with 管理，graph 在 lifespan 内编译后存入 app.state.graph；安装 langgraph-checkpoint-postgres 3.0.5 + psycopg[binary,pool]。
 - 2026-05-05：Agent 架构优化：从”纯 ReAct 自由调用完整生成链路”调整为”agent 决策节点 + rag_gate + 确定性生成子流程”；图像生成、评估、重试由 Graph 控制，`retry_count` 仅作用于当前生成任务；新增 `turn_id` / `run_id` / `phase` / `current_task_id` / `best_generation_result` / `last_search_signature` 等运行态字段；用户中断从内存 `cancel_event` 调整为 Redis cancel flag（`cancel:{session_id}:{run_id}`）；RAG 触发从完全自主决策改为规则门控；MCP 只向 Agent 暴露检索工具，`store_generated_image` 仅由 `POST /api/library/store` 直接调用。
 - 2026-05-04：Embedding 提供商从百炼切换至火山引擎：文本 embedding 改用 doubao-embedding（2048 维，OpenAI 兼容 endpoint），图像 embedding 改用 doubao-embedding-vision-251215（3072 维，multimodal endpoint）；Milvus Collection 向量维度同步更新（caption_vector 1024→2048，image_vector 768→3072）；dashboard.yaml 新增 embedding 配置块；工厂 key 从 bailian 改为 volcengine。
