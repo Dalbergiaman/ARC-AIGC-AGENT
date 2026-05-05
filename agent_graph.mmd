@@ -1,0 +1,37 @@
+flowchart TD
+    START([用户消息进入]) --> RESET[agent 节点入口\nreset cancel_event]
+    RESET --> INTERRUPT{interrupt_before\n检查新消息}
+    INTERRUPT -->|恢复/首次进入| AGENT
+
+    AGENT[agent 节点\nLLM 思考决策]
+
+    AGENT -->|信息不足| REPLY[直接回复用户\n追问设计细节]
+    REPLY --> END_TURN([本轮结束 · stop])
+
+    AGENT -->|有未分析的参考图| ANALYZE[analyze_reference_image]
+    ANALYZE --> AGENT
+
+    AGENT -->|需要风格关键词| STYLE[lookup_style_keywords]
+    STYLE --> AGENT
+
+    AGENT -->|需要历史案例| SEARCH[search_similar_cases · MCP]
+    SEARCH --> AGENT
+
+    AGENT -->|设计信息充分| ENHANCE[enhance_prompt]
+    ENHANCE --> AGENT
+
+    AGENT -->|调用生成工具| GENERATE["generate_image\n① 提交 Celery 任务\n② 轮询 Redis（每 2s）\n③ 每次轮询检查 cancel_event"]
+    GENERATE -->|cancel_event 被 set| INTERRUPT
+    GENERATE -->|生成完成| AGENT
+
+    AGENT -->|调用评估工具| EVALUATE[evaluate_generated_image\nVLM 多维度打分]
+    EVALUATE --> AGENT
+
+    AGENT -->|score >= 0.8\n或 retry_count == 3| SHOW[回复用户 · 展示图片]
+    AGENT -->|score < 0.8\n且 retry_count < 3| REFINE[refine_prompt]
+    REFINE --> AGENT
+
+    SHOW --> END_SHOW([本轮结束 · stop / max_retries])
+
+    FRONTEND[前端图片卡片\n操作按钮区] -->|用户点击「存入图库」| STORE_API["POST /api/library/store\n独立 REST 接口"]
+    STORE_API --> MCP[store_to_library · MCP\n存 PostgreSQL + Milvus]
