@@ -160,9 +160,10 @@ aigc_agent/
 
 ### AgentState（工作记忆）
 
+`AgentState` 继承 LangGraph 的 `MessagesState`（本身是 `TypedDict` 子类），`messages` 字段自动附加 `add_messages` reducer，保证多轮对话历史追加而非覆盖。
+
 ```python
-class AgentState(TypedDict):
-    messages: list[BaseMessage]          # 对话历史
+class AgentState(MessagesState):  # MessagesState 是带 add_messages reducer 的 TypedDict
     design_state: DesignState            # 结构化设计参数（工作记忆核心）
     reference_images: list[ReferenceImageAnalysis]  # 参考图分析结果
     ready_to_generate: bool              # 控制流：是否触发生成
@@ -178,10 +179,43 @@ class AgentState(TypedDict):
     run_id: str                          # 本轮 Agent 执行 ID，用于取消与断线重连
 ```
 
+所有子结构（`DesignState`、`ReferenceImageAnalysis`、`GenerationResult`、`EvaluationResult`、`ImageRecord`）均使用 `TypedDict` 定义，确保 LangGraph checkpointer JSON 序列化兼容。
+
+### Agent 层子结构定义
+
+> 注意：`GenerationResult` 在 Agent 层（`agent/state.py`）和图像生成层（`core/image/base.py`）各有一份定义，含义不同。Agent 层的版本额外包含 `score` 字段（评估分数），是评估完成后的完整记录；生成层的版本只含生成本身的原始结果。
+
+```python
+class ReferenceImageAnalysis(TypedDict, total=False):
+    image_url: str
+    building_type: str
+    style: str
+    facade_material: str
+    lighting: str
+    viewpoint: str
+    color_palette: str
+    description: str
+
+class GenerationResult(TypedDict, total=False):  # Agent 层，含评估分数
+    image_url: str
+    provider: str
+    generation_time: float
+    score: float          # 评估后填入，生成层 GenerationResult 无此字段
+    raw_response: dict
+
+class ImageRecord(TypedDict):
+    id: str
+    image_url: str
+    caption: str
+    prompt: str
+    design_state: dict
+    provider: str
+```
+
 ### DesignState 结构
 
 ```python
-class DesignState(TypedDict):
+class DesignState(TypedDict, total=False):
     building_type: str        # 建筑类型（别墅/商业/办公...）
     style: str                # 风格（极简/新中式/工业风...）
     facade_material: str      # 外立面材质
@@ -548,8 +582,7 @@ class ImageEmbeddingFactory:
 ### EvaluationResult 数据结构
 
 ```python
-@dataclass
-class EvaluationResult:
+class EvaluationResult(TypedDict):
     score: float                    # 加权总分 0.0~1.0，低于 0.8 触发重试
     style_score: float              # 风格符合度
     material_score: float           # 材质还原度
@@ -1103,16 +1136,16 @@ backend/tests/
 
 **C-1 会话与消息 API**
 
-- [ ] 编写 `backend/services/session_service.py` / `message_service.py`（sessions / messages 表 CRUD）
-- [ ] 编写 `backend/api/routes/session.py`（`POST /api/sessions` / `GET /api/sessions/{id}`）
+- [x] 编写 `backend/services/session_service.py` / `message_service.py`（sessions / messages 表 CRUD）
+- [x] 编写 `backend/api/routes/session.py`（`POST /api/sessions` / `GET /api/sessions/{id}`）
 
 **C-2 Agent 状态与 Graph 骨架**
 
-- [ ] 编写 `backend/agent/state.py`（`AgentState` / `DesignState` / `ReferenceImageAnalysis` / `GenerationResult` / `EvaluationResult` / `ImageRecord` 全部类型定义）
-- [ ] 编写 `backend/agent/state_utils.py`（规则计算 `missing_fields` / `completeness`，生成 `last_search_signature`，重置当前生成任务运行态）
-- [ ] 编写 `backend/agent/checkpointer.py`（初始化 `langgraph-checkpoint-postgres`，连接 PostgreSQL）
-- [ ] 编写 `backend/agent/graph.py` 骨架（`agent` 决策节点 + `rag_gate` + 确定性生成子流程，`recursion_limit=25`，`interrupt_before=["agent"]`，暂时不挂重工具）
-- [ ] 验证空 Graph 可以正常 `ainvoke`
+- [x] 编写 `backend/agent/state.py`（`AgentState` / `DesignState` / `ReferenceImageAnalysis` / `GenerationResult` / `EvaluationResult` / `ImageRecord` 全部类型定义，均使用 `TypedDict`）
+- [x] 编写 `backend/agent/state_utils.py`（规则计算 `missing_fields` / `completeness`，生成 `last_search_signature`，重置当前生成任务运行态）
+- [x] 编写 `backend/agent/checkpointer.py`（`AsyncPostgresSaver`，生命周期由 FastAPI lifespan `async with` 管理）
+- [x] 编写 `backend/agent/graph.py` 骨架（`agent` 决策节点 + `rag_gate` + 确定性生成子流程，`interrupt_before=["agent"]`，节点均为 stub）
+- [x] 验证空 Graph 可以正常导入，节点结构正确
 
 > ⚠️ 注意：`langgraph-checkpoint-postgres` 需要在 FastAPI 启动时初始化（`lifespan` 事件），不能在请求时临时创建连接。
 
@@ -1237,7 +1270,8 @@ backend/tests/
 **阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成，当前进入 C 阶段（Agent 核心）
 
 **最近决策记录**：
-- 2026-05-05：Agent 架构优化：从“纯 ReAct 自由调用完整生成链路”调整为“agent 决策节点 + rag_gate + 确定性生成子流程”；图像生成、评估、重试由 Graph 控制，`retry_count` 仅作用于当前生成任务；新增 `turn_id` / `run_id` / `phase` / `current_task_id` / `best_generation_result` / `last_search_signature` 等运行态字段；用户中断从内存 `cancel_event` 调整为 Redis cancel flag（`cancel:{session_id}:{run_id}`）；RAG 触发从完全自主决策改为规则门控；MCP 只向 Agent 暴露检索工具，`store_generated_image` 仅由 `POST /api/library/store` 直接调用。
+- 2026-05-05：C-1/C-2 完成：会话与消息 API（session_service / message_service / session 路由）；Agent 状态层全部子结构（ReferenceImageAnalysis / GenerationResult / EvaluationResult / ImageRecord）从 @dataclass 改为 TypedDict，确保 LangGraph checkpointer JSON 序列化兼容；AgentState 继承 MessagesState（带 add_messages reducer 的 TypedDict）；checkpointer 生命周期改为 FastAPI lifespan async with 管理，graph 在 lifespan 内编译后存入 app.state.graph；安装 langgraph-checkpoint-postgres 3.0.5 + psycopg[binary,pool]。
+- 2026-05-05：Agent 架构优化：从”纯 ReAct 自由调用完整生成链路”调整为”agent 决策节点 + rag_gate + 确定性生成子流程”；图像生成、评估、重试由 Graph 控制，`retry_count` 仅作用于当前生成任务；新增 `turn_id` / `run_id` / `phase` / `current_task_id` / `best_generation_result` / `last_search_signature` 等运行态字段；用户中断从内存 `cancel_event` 调整为 Redis cancel flag（`cancel:{session_id}:{run_id}`）；RAG 触发从完全自主决策改为规则门控；MCP 只向 Agent 暴露检索工具，`store_generated_image` 仅由 `POST /api/library/store` 直接调用。
 - 2026-05-04：Embedding 提供商从百炼切换至火山引擎：文本 embedding 改用 doubao-embedding（2048 维，OpenAI 兼容 endpoint），图像 embedding 改用 doubao-embedding-vision-251215（3072 维，multimodal endpoint）；Milvus Collection 向量维度同步更新（caption_vector 1024→2048，image_vector 768→3072）；dashboard.yaml 新增 embedding 配置块；工厂 key 从 bailian 改为 volcengine。
 - 2026-05-04：确认 Agent 流程设计：store_to_library 解耦出 Agent，改为前端按钮触发独立 REST 接口 POST /api/library/store；生成流程最初设计为标准 ReAct，已于 2026-05-05 调整为确定性生成子流程。
 - 2026-05-04：B-3 图像生成客户端：用 GrsAI（`grsai_client.py`）替换 OpenRouter，GrsAI 同步返回图片 URL（`results[0].url`），支持 `gpt-image` / `nano-banana` 模型，工厂 `create` 方法新增 `model` 参数。
