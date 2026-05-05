@@ -616,6 +616,10 @@ class EvaluationResult(TypedDict):
 | 整体质量 | 10% | 同上 |
 | 参考图相似度 | 25% | 生成图与参考图在构图、色调、风格上的整体相似程度 |
 
+> **当前实现（C-5）**：参考图相似度为整体综合评分，VLM 同时看生成图和所有参考图，给出一个整体相似度分。
+>
+> **待扩展（E 阶段）**：支持用户在上传参考图时标注参考意图（构图 / 色彩 / 建筑样式 / 材质），存入 `ReferenceImageAnalysis.reference_intent` 字段。评估时按意图动态调整 prompt（"这张图是构图参考，请只评估构图相似度"），`reference_score` 拆分为多个子维度分数。前端 `ImageUploader` 组件需同步增加意图选择 UI。
+
 ### 工具签名
 
 ```python
@@ -1176,14 +1180,15 @@ backend/tests/
 
 **C-5 评估与重试工具**
 
-- [ ] 补充 `agent/prompts.py`（`evaluate_image_system`，区分有无参考图两套权重说明）
-- [ ] 编写 `agent/tools/image_evaluator.py`（`evaluate_generated_image`：调用 VLM 对生成图打分，`reference_images` 为空时用 5 维权重，非空时用 6 维权重，返回 `EvaluationResult`；输出用 Pydantic schema 校验）
-- [ ] 在确定性生成子流程中实现重试逻辑（`retry_count < 3` 且 `score < 0.8` 时循环，`retry_count == 3` 时返回 `best_generation_result`）
+- [x] `agent/prompts.py` 已在 C-3 补充 `evaluate_image_system`（区分有无参考图两套权重说明）
+- [x] 编写 `agent/tools/image_evaluator.py`（`evaluate_generated_image`：VLM 输出各维度原始分，后端代码加权计算总分；`reference_images` 为空时用 5 维权重，非空时用 6 维权重；解析失败重试 1 次，仍失败走 fallback 中性分；补充 `if __name__ == "__main__"` 手动测试入口）
+- [x] `evaluate_image_node` 替换 stub，接入真实评估；`best_generation_result` 跨重试追踪最高分
+- [x] 重试逻辑：`route_after_evaluate` 中 `score < 0.8` 且 `retry_count < 3` 时走 `refine_prompt`，否则返回 `best_generation_result`
 
-> 🧪 测试：`tests/agent/tools/test_image_evaluator.py`
-> - `reference_images=[]` 时权重之和为 1.0，不含 `reference_score`
-> - `reference_images` 非空时权重之和为 1.0，含 `reference_score`
-> - 加权计算结果精度正确
+> 🧪 测试：`tests/agent/tools/test_image_evaluator.py`（9 个测试全部通过）
+> - 无参考图时权重之和为 1.0，不含 `reference_score`
+> - 有参考图时权重之和为 1.0，含 `reference_score`
+> - 加权计算精度正确，分数 clamp 到 [0, 1]
 
 **C-6 SSE 流式输出**
 
@@ -1272,6 +1277,7 @@ backend/tests/
 **阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成，当前进入 C 阶段（Agent 核心）
 
 **最近决策记录**：
+- 2026-05-05：C-5 完成：评分加权由后端代码计算（LLM 只输出各维度原始分），权重常量写在 `image_evaluator.py` 内；参考图相似度当前为整体综合评分，E 阶段扩展为按用户标注意图（构图/色彩/样式/材质）分维度评估，计划已写入文档；9 个单元测试全部通过。
 - 2026-05-05：C-4 完成：prompt_builder（EnhancedPrompt Pydantic 校验，失败重试 1 次后 fallback）；Celery 方案 A（asyncio.run 包装，迁移方案 B 只改 task 装饰器）；image_generator 引入 SSEEmitter 协议 + NullEmitter 占位，C-6 注入真实 emitter，测试可用 MockEmitter；AgentState 新增 `_enhanced_prompt` / `_current_gen_result` 内部传递字段。
 - 2026-05-05：C-3 完成：`StyleKeywords` 新增 `description` 字段（2-3 句风格说明，供 `enhance_prompt` LLM 参考），与 `mood`（一句话氛围，供 agent 对话）和 `positive`/`negative`（直接拼入图像生成 prompt）分工明确；`agent_node` 工具调用改为规则驱动（有图片 URL → 分析，有风格 → 查关键词），不使用 LLM bind_tools；`rag_gate_node` 按规则调用 `search_similar_cases`。
 - 2026-05-05：C-1/C-2 完成：会话与消息 API（session_service / message_service / session 路由）；Agent 状态层全部子结构（ReferenceImageAnalysis / GenerationResult / EvaluationResult / ImageRecord）从 @dataclass 改为 TypedDict，确保 LangGraph checkpointer JSON 序列化兼容；AgentState 继承 MessagesState（带 add_messages reducer 的 TypedDict）；checkpointer 生命周期改为 FastAPI lifespan async with 管理，graph 在 lifespan 内编译后存入 app.state.graph；安装 langgraph-checkpoint-postgres 3.0.5 + psycopg[binary,pool]。

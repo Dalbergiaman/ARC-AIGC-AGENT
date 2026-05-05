@@ -19,6 +19,7 @@ from agent.state_utils import (
     update_completeness,
 )
 from agent.tools.image_analysis import analyze_reference_image
+from agent.tools.image_evaluator import evaluate_generated_image
 from agent.tools.image_generator import NullEmitter, generate_image
 from agent.tools.prompt_builder import EnhancedPrompt, enhance_prompt, refine_prompt
 from agent.tools.style_lookup import lookup_style_keywords
@@ -237,28 +238,32 @@ async def generate_image_node(state: AgentState) -> dict:
 
 
 async def evaluate_image_node(state: AgentState) -> dict:
-    """Evaluate the generated image with VLM.
-
-    Stub: returns a passing score. Will call evaluate_generated_image in C-5.
-    """
-    stub_eval: EvaluationResult = {
-        "score": 0.9,
-        "style_score": 0.9,
-        "material_score": 0.9,
-        "lighting_score": 0.9,
-        "composition_score": 0.9,
-        "quality_score": 0.9,
-        "reference_score": None,
-        "feedback": "stub evaluation",
-    }
+    """Evaluate the generated image with VLM multi-dimensional scoring."""
     gen_result = state.get("_current_gen_result")
-    best = state.get("best_generation_result")
-    if gen_result:
-        scored = {**gen_result, "score": stub_eval["score"]}
-        if best is None or scored["score"] > best.get("score", 0):
-            best = scored
+    if gen_result is None:
+        # No image to evaluate — skip with neutral score
+        return {"phase": "done"}
 
-    return {"last_evaluation": stub_eval, "best_generation_result": best, "phase": "done"}
+    design_state = dict(state.get("design_state") or {})
+    reference_images = list(state.get("reference_images") or [])
+
+    evaluation = await evaluate_generated_image(
+        image_url=gen_result["image_url"],
+        design_state=design_state,
+        reference_images=reference_images,
+    )
+
+    # Track best result across retries
+    scored = {**gen_result, "score": evaluation["score"]}
+    best = state.get("best_generation_result")
+    if best is None or scored["score"] > best.get("score", 0):
+        best = scored
+
+    return {
+        "last_evaluation": evaluation,
+        "best_generation_result": best,
+        "phase": "done",
+    }
 
 
 async def refine_prompt_node(state: AgentState) -> dict:
