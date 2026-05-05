@@ -1192,8 +1192,8 @@ backend/tests/
 
 **C-6 SSE 流式输出**
 
-- [ ] 编写 `core/llm/streaming.py`（从 LangGraph `astream_events` 过滤，映射到 7 种 SSE 事件类型，`summarize_tool_output` 转用户友好摘要）
-- [ ] 编写 `backend/api/routes/chat.py`（`POST /api/chat/sessions/{id}/messages` 提交消息并返回 `stream_id`；`GET /api/chat/sessions/{id}/stream?stream_id=xxx` 返回 SSE，事件 id 递增，支持 `Last-Event-ID` 断线重连）
+- [x] 编写 `core/llm/streaming.py`（从 LangGraph `astream_events` 过滤，映射到 7 种 SSE 事件类型，`summarize_tool_output` 转用户友好摘要）
+- [x] 编写 `backend/api/routes/chat.py`（`POST /api/chat/sessions/{id}/messages` 提交消息并返回 `stream_id`；`GET /api/chat/sessions/{id}/stream?stream_id=xxx` 返回 SSE，事件 id 递增，支持 `Last-Event-ID` 断线重连）
 - [ ] 加最外层 `@observe(name="agent:turn")` Trace
 
 > ⚠️ 注意：原生 `EventSource` 只能发 GET 请求，因此消息提交和 SSE 订阅必须拆开。FastAPI SSE 响应需设置 `Content-Type: text/event-stream` 和 `Cache-Control: no-cache`，并在每个事件后 flush。断线重连时按 `stream_id` + `Last-Event-ID` 续传，需在内存或 Redis 中短暂缓存最近的事件序列（TTL 60s 即可）。
@@ -1277,6 +1277,7 @@ backend/tests/
 **阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成，当前进入 C 阶段（Agent 核心）
 
 **最近决策记录**：
+- 2026-05-05：C-6 完成（@observe 留 C-7）：`streaming.py` 用 ContextVar 注入 QueueEmitter，同时消费 `astream_events` 和 emitter queue，映射 7 种 SSE 事件；`chat.py` 两端点（POST 提交消息存 Redis pending key，GET 消费 SSE），stream_id == run_id，Redis 缓冲 TTL 60s 支持 Last-Event-ID 断线重连；`generate_image_node` 从 ContextVar 读取 emitter；chat router 注册到 main.py。
 - 2026-05-05：C-5 完成：评分加权由后端代码计算（LLM 只输出各维度原始分），权重常量写在 `image_evaluator.py` 内；参考图相似度当前为整体综合评分，E 阶段扩展为按用户标注意图（构图/色彩/样式/材质）分维度评估，计划已写入文档；9 个单元测试全部通过。
 - 2026-05-05：C-4 完成：prompt_builder（EnhancedPrompt Pydantic 校验，失败重试 1 次后 fallback）；Celery 方案 A（asyncio.run 包装，迁移方案 B 只改 task 装饰器）；image_generator 引入 SSEEmitter 协议 + NullEmitter 占位，C-6 注入真实 emitter，测试可用 MockEmitter；AgentState 新增 `_enhanced_prompt` / `_current_gen_result` 内部传递字段。
 - 2026-05-05：C-3 完成：`StyleKeywords` 新增 `description` 字段（2-3 句风格说明，供 `enhance_prompt` LLM 参考），与 `mood`（一句话氛围，供 agent 对话）和 `positive`/`negative`（直接拼入图像生成 prompt）分工明确；`agent_node` 工具调用改为规则驱动（有图片 URL → 分析，有风格 → 查关键词），不使用 LLM bind_tools；`rag_gate_node` 按规则调用 `search_similar_cases`。

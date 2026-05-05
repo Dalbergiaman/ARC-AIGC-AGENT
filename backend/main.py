@@ -6,6 +6,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from agent.checkpointer import get_conn_string, init_checkpointer
 from agent.graph import compile_graph
+from api.routes.chat import router as chat_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.session import router as session_router
 from api.routes.upload import router as upload_router
@@ -28,6 +29,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AIGC Agent", lifespan=lifespan)
+app.include_router(chat_router)
 app.include_router(dashboard_router)
 app.include_router(session_router)
 app.include_router(upload_router)

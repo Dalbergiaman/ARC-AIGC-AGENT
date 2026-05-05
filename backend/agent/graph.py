@@ -21,6 +21,7 @@ from agent.state_utils import (
 from agent.tools.image_analysis import analyze_reference_image
 from agent.tools.image_evaluator import evaluate_generated_image
 from agent.tools.image_generator import NullEmitter, generate_image
+from core.llm.streaming import get_current_emitter
 from agent.tools.prompt_builder import EnhancedPrompt, enhance_prompt, refine_prompt
 from agent.tools.style_lookup import lookup_style_keywords
 from agent.tools.search_library import search_similar_cases
@@ -213,11 +214,12 @@ async def generate_image_node(state: AgentState) -> dict:
     retry_count = state.get("retry_count", 0)
     best = state.get("best_generation_result")
 
+    emitter = get_current_emitter() or NullEmitter()
     try:
         gen_result = await generate_image(
             state=state,
             enhanced_prompt=enhanced_prompt,
-            emitter=None,  # C-6 will inject real SSEEmitter
+            emitter=emitter,
         )
     except TimeoutError:
         return {
