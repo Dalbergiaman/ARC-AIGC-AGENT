@@ -6,7 +6,7 @@ import { InputBar } from "@/components/chat/InputBar";
 import { MessageList } from "@/components/chat/MessageList";
 
 type Props = {
-  sessionId: string;
+  sessionTitle: string;
   messages: ChatMessage[];
   activeToolStatus: ToolStatus | null;
   generationPreviews: GenerationPreview[];
@@ -16,7 +16,7 @@ type Props = {
 };
 
 export function ChatPanel({
-  sessionId,
+  sessionTitle,
   messages,
   activeToolStatus,
   generationPreviews,
@@ -25,9 +25,9 @@ export function ChatPanel({
   onSubmit,
 }: Props) {
   return (
-    <section className="flex min-h-0 flex-1 flex-col bg-[linear-gradient(180deg,#fcfcfc_0%,#f7f7f7_100%)]">
-      <header className="border-b bg-white/80 px-6 py-4 backdrop-blur">
-        <div className="text-sm font-semibold">会话 {sessionId}</div>
+    <section className="flex min-h-0 flex-1 flex-col bg-white">
+      <header className="flex h-[72px] flex-col justify-center border-b border-black/6 bg-white px-6 py-4">
+        <div className="text-sm font-semibold">{sessionTitle}</div>
         <div className="text-xs text-muted-foreground">
           {streamState === "streaming" ? "模型正在回复" : "纯文字对话主链路"}
         </div>

@@ -92,7 +92,7 @@ export default function DashboardPage() {
       <header className="flex items-center justify-between border-b px-4 py-3">
         <div className="flex items-center gap-2">
           <Link
-            href="/"
+            href="/chat/new"
             className="rounded-md border px-2 py-1 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             &lt;

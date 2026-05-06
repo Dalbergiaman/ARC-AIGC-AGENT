@@ -45,6 +45,42 @@ class TestSessionService(unittest.IsolatedAsyncioTestCase):
         db.commit.assert_awaited_once()
         db.refresh.assert_awaited_once_with(session)
 
+    async def test_update_session_title_commits_and_refreshes_session(self):
+        session = SimpleNamespace(id=uuid.uuid4(), title="Unnamed Chat")
+        db = SimpleNamespace(commit=AsyncMock(), refresh=AsyncMock())
+
+        with patch.object(session_service, "get_session", AsyncMock(return_value=session)) as mocked_get:
+            updated = await session_service.update_session_title(db, session.id, "Modern Villa")
+
+        self.assertIs(updated, session)
+        self.assertEqual(session.title, "Modern Villa")
+        mocked_get.assert_awaited_once_with(db, session.id)
+        db.commit.assert_awaited_once()
+        db.refresh.assert_awaited_once_with(session)
+
+    async def test_delete_session_returns_false_when_missing(self):
+        db = SimpleNamespace(execute=AsyncMock(), commit=AsyncMock())
+
+        with patch.object(session_service, "get_session", AsyncMock(return_value=None)) as mocked_get:
+            deleted = await session_service.delete_session(db, uuid.uuid4())
+
+        self.assertFalse(deleted)
+        mocked_get.assert_awaited_once()
+        db.execute.assert_not_called()
+        db.commit.assert_not_called()
+
+    async def test_delete_session_removes_related_records_and_commits(self):
+        session = SimpleNamespace(id=uuid.uuid4())
+        db = SimpleNamespace(execute=AsyncMock(), commit=AsyncMock())
+
+        with patch.object(session_service, "get_session", AsyncMock(return_value=session)) as mocked_get:
+            deleted = await session_service.delete_session(db, session.id)
+
+        self.assertTrue(deleted)
+        mocked_get.assert_awaited_once_with(db, session.id)
+        self.assertEqual(db.execute.await_count, 4)
+        db.commit.assert_awaited_once()
+
 
 if __name__ == "__main__":
     unittest.main()

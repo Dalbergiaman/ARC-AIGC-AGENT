@@ -25,6 +25,7 @@ from core.llm.streaming import _parse_sse_chunk, stream_agent_events
 from models.database import get_session
 from services.message_service import add_message, get_messages
 from services.session_service import get_session as get_db_session
+from services.session_title_service import maybe_generate_session_title
 
 router = APIRouter(prefix="/api/chat")
 
@@ -226,6 +227,10 @@ async def _generate_sse(
                 assistant_text = "".join(assistant_text_parts).strip()
                 if assistant_text:
                     await add_message(db, session_id, "assistant", assistant_text)
+                    try:
+                        await maybe_generate_session_title(db, session_id)
+                    except Exception:
+                        pass
                 await _clear_active_run(r, session_id, stream_id)
                 should_persist_assistant = False
 

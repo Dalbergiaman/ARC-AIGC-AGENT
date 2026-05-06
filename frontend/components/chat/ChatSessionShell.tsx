@@ -5,10 +5,13 @@ import { useRouter } from "next/navigation";
 
 import { ChatWorkspace } from "@/components/chat/ChatWorkspace";
 import { createSession } from "@/lib/api";
+import type { SessionResponse } from "@/lib/types";
 
 type Props = {
   sessionId: string;
 };
+
+let pendingSessionCreation: Promise<SessionResponse> | null = null;
 
 export function ChatSessionShell({ sessionId }: Props) {
   const router = useRouter();
@@ -23,11 +26,18 @@ export function ChatSessionShell({ sessionId }: Props) {
     async function resolveSession() {
       if (sessionId !== "new") {
         setResolvedSessionId(sessionId);
+        setError(null);
         return;
       }
 
+      setResolvedSessionId(null);
+      setError(null);
+
       try {
-        const session = await createSession();
+        if (!pendingSessionCreation) {
+          pendingSessionCreation = createSession();
+        }
+        const session = await pendingSessionCreation;
         if (!active) {
           return;
         }
@@ -38,6 +48,8 @@ export function ChatSessionShell({ sessionId }: Props) {
           return;
         }
         setError(nextError instanceof Error ? nextError.message : "创建会话失败");
+      } finally {
+        pendingSessionCreation = null;
       }
     }
 

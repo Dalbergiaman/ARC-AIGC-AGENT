@@ -962,7 +962,7 @@ GET    /api/dashboard/providers                   获取支持的图像生成平
 
 ```sql
 -- 主业务库（PostgreSQL）
-sessions          (id, design_state JSON, created_at)
+sessions          (id, title, design_state JSON, created_at)
 messages          (id, session_id, role, content, created_at)
 reference_images  (id, session_id, file_id, url, analysis JSON)
 generation_tasks  (id, session_id, prompt, image_url, status, created_at)
@@ -1458,6 +1458,16 @@ backend/tests/
 7. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-06：完成 `sessions.title` schema 漂移修复：当前后端 SQLAlchemy `Session` 模型、`create_session` 逻辑和前端会话列表均已依赖 `title` 字段，但 FastAPI 启动阶段使用的 `Base.metadata.create_all()` 只能创建缺失表，不能为已存在的 `sessions` 表自动补列，导致旧开发库在访问 `/chat/new` 时插入 `title` 失败。现已在 `backend/models/schema_guard.py` 增加启动期 schema guard，并在 FastAPI lifespan 中于 `create_all()` 后执行；当检测到旧 `sessions` 表缺少 `title` 列时，自动执行 `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS title VARCHAR(255) NOT NULL DEFAULT 'Unnamed Chat';` 补齐结构。补充单元测试覆盖“表不存在 / 列已存在 / 缺列自动补齐”三种场景。验收标准保持不变：旧数据库不删库重启后可成功 `POST /api/sessions`，`GET /api/sessions` 返回 `title`，前端进入 `/chat/new` 不再触发 `column "title" does not exist`。
+- 2026-05-06：工作台右侧栏宽度改为按整体比例存储与拖拽，而非固定像素宽度；`workspaceStore` 使用 `workspaceWidthRatio` 表示工作区占聊天页容器的比例，拖拽分隔条时根据当前容器宽度实时换算。为避免右栏挤压主对话区，当前允许范围设为 `22%` 到 `50%`，从而支持用户将右侧工作区拉大到页面一半，同时在窗口尺寸变化时保持相对布局稳定。
+- 2026-05-06：中栏会话头部标题与左侧 Sidebar 历史对话名称对齐，统一使用会话详情/会话列表返回的 `sessions.title` 展示，不再直接显示 `sessionId`。`ChatWorkspace` 负责维护当前会话标题：初次进入会话时从 `getSession` 返回值设置，后续当 `listSessions` 刷新到异步生成的新标题后，同步更新中栏标题，避免左中两处名称不一致。
+- 2026-05-06：聊天页三栏视觉收敛为更接近 OpenAI 的简洁白底工作区：左栏、中栏、右栏统一去除明显灰色渐变底和强卡片阴影，改为纯白背景 + 极轻分隔线 + 轻 hover 态；用户消息保留纯黑实底，助手消息与工作区卡片仅保留细边框。目标是降低三栏之间的割裂感，让布局更平、更轻，避免“每栏一块灰底”的拼贴效果。
+- 2026-05-06：进一步修正聊天页 Sidebar 分隔线未拉满的问题：仅给 `ChatWorkspace` 设置 `min-h-screen` 还不够，因为 `AppSidebar` 原先使用 `h-full`，而父容器只有 `min-height` 没有显式 `height` 时，`height: 100%` 不会按整屏解析，Sidebar 仍可能只长到内容高度。现改为由 flex 布局直接拉伸 Sidebar（`self-stretch`），并在 `ChatWorkspace` 显式声明 `items-stretch`，保证左栏边线随三栏容器完整贯穿到底部。
+- 2026-05-06：统一聊天页三栏顶部 header 高度，避免 Sidebar 标题区底线与中栏/右栏 header 底线错位。当前为 Sidebar、ChatPanel、WorkspacePanel 顶部统一设定 `72px` 高度，由显式高度控制对齐，而不是继续依赖各自不同的 padding 和内容自然撑开。
+- 2026-05-06：Dashboard 左上角返回按钮改为回到聊天工作台而不是 root 首页。当前产品主入口已经是 `/chat/[sessionId]` 三栏工作台，Dashboard 属于工作台内配置页，因此返回目标统一为 `/chat/new`，避免用户从配置页误跳回非主工作流页面。
+- 2026-05-06：补充会话自动命名能力：`sessions` 新增 `title` 字段，默认值为 `Unnamed Chat`；左侧历史对话不再显示 `sessionId`，改为显示 `title`。首轮对话完成后，后端在 assistant 首条消息落库后异步调用一次 LLM，根据“首条用户消息 + 首条助手回复”生成简短标题，并仅在当前标题仍是默认值时更新，失败则保留 `Unnamed Chat`。该命名流程不阻塞主 SSE 回复链路，避免影响首轮交互时延。
+- 2026-05-06：会话管理修正二次落地：确认 `/chat/new` 卡住和重复建会话的根因不是单纯 effect 重跑，而是开发模式下组件可能卸载再重挂，`useRef` 无法跨挂载共享中的建会话请求；改为 `ChatSessionShell` 模块级 `pendingSessionCreation` promise 兜底。与此同时移除 sidebar 历史对话的前端 `slice(0, 8)` 上限，后端 `list_sessions` 改为默认不裁剪，避免随着会话数增加出现“新建后看不到/误判为失败”的体验问题。删除当前会话后改为先重新拉取最新会话列表，再决定跳转目标，避免使用过期列表导致跳转和删除状态不一致。
+- 2026-05-06：E-2 前先修会话管理基础问题：`/chat/new` 的客户端建会话逻辑增加一次性保护，避免 Next.js 开发模式下 effect 重跑导致重复创建 session；左侧 Sidebar 增加显式“新建对话”入口；后端新增 `DELETE /api/sessions/{id}`，级联删除 `messages`、`reference_images`、`generation_tasks`；前端历史会话列表增加删除按钮，删除当前会话后自动跳转到下一条会话或 `/chat/new`。该修复属于前端主链路基础能力，优先于 E-2 继续扩展。
 - 2026-05-06：E-1 后补充工作台布局交互：中栏与右栏之间增加桌面端拖拽分隔条，用户可直接用鼠标调整右侧工作区宽度；`workspaceStore` 新增 `workspaceWidth` / `workspaceCollapsed`，右栏支持像左侧 Sidebar 一样折叠，并保留窄恢复栏。该能力属于工作台壳层交互，先于 E-2 落地，避免后续在提示词/参考图工作区完成后再返工布局。
 - 2026-05-06：E-1 完成：前端新增 `components/chat/*`、`hooks/useSSE.ts`、`store/chatStore.ts`、`store/workspaceStore.ts`，落地左中右三栏骨架、纯文字多轮对话、SSE 文本/工具/生成事件消费，以及右侧 Prompt/生成图占位标签；`/chat/new` 改为客户端创建真实会话后跳转。为保证刷新和历史可用，后端 `session.py` 新增 `GET /api/sessions` 会话列表与 `GET /api/sessions/{id}` 消息历史返回，前端在进入会话时加载历史消息并渲染左侧历史列表。E-1 仍不包含参考图上传、prompt/参数持久化和批注下载，这些保留到 E-2 以后。
 - 2026-05-06：C-8 完成：`dashboard_service.py` 补齐 `embedding` 默认配置与 provider 列表，image provider 从残留 `openrouter` 改为 `grsai`，并增加 `__main__` 自检入口；`dashboard.py` 接受 `embedding` patch；`dashboard.yaml.example` 补齐 `embedding` 配置块并统一 `grsai` 命名；前端 `types.ts` 增加 `image_provider.model` 与 `embedding` 类型，Dashboard 新增 Embedding tab，图像生成平台配置增加 model 选择；`agent_graph.mmd` 改为当前 `agent -> rag_gate -> enhance_prompt -> generate_image -> evaluate_image -> refine_prompt` 的确定性子流程；`tests/services/test_dashboard_service.py` 更新为 `grsai`/`embedding` 并通过；前端 `npm run lint` 通过。

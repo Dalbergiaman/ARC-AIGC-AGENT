@@ -23,8 +23,8 @@ export function InputBar({ disabled = false, onSubmit }: Props) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="border-t bg-white px-4 py-4">
-      <div className="flex items-end gap-3 rounded-2xl border bg-background p-3 shadow-sm">
+    <form onSubmit={handleSubmit} className="border-t border-black/6 bg-white px-4 py-4">
+      <div className="flex items-end gap-3 rounded-3xl border border-black/8 bg-white p-3">
         <textarea
           value={value}
           onChange={(event) => setValue(event.target.value)}
@@ -35,7 +35,7 @@ export function InputBar({ disabled = false, onSubmit }: Props) {
         <button
           type="submit"
           disabled={disabled || !value.trim()}
-          className="inline-flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-black text-white disabled:cursor-not-allowed disabled:opacity-50"
           aria-label="发送消息"
         >
           <SendHorizontal className="size-4" />

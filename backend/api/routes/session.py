@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.database import get_session as get_db
 from services.message_service import get_messages
-from services.session_service import create_session, get_session, list_sessions
+from services.session_service import create_session, delete_session, get_session, list_sessions
 
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -15,6 +15,7 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 class SessionResponse(BaseModel):
     id: uuid.UUID
+    title: str = "Unnamed Chat"
     design_state: dict | None
     created_at: datetime | None = None
 
@@ -58,3 +59,12 @@ async def get_session_detail(
         **SessionResponse.model_validate(session).model_dump(),
         messages=[MessageResponse.model_validate(message) for message in messages],
     )
+
+
+@router.delete("/{session_id}", status_code=204)
+async def delete_session_item(
+    session_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> None:
+    deleted = await delete_session(db, session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")

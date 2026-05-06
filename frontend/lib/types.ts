@@ -55,6 +55,7 @@ export type DashboardProviders = {
 
 export type SessionResponse = {
   id: string;
+  title: string;
   design_state: Record<string, unknown> | null;
   created_at?: string;
 };
