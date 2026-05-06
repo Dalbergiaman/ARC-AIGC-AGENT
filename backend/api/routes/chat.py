@@ -10,8 +10,6 @@ GET /api/chat/sessions/{session_id}/stream?stream_id=<uuid>
 """
 from __future__ import annotations
 
-import asyncio
-import json
 import uuid
 from typing import AsyncIterator
 
@@ -22,9 +20,8 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agent.state import default_agent_state
 from config import settings
-from core.llm.streaming import QueueEmitter, _EMITTER_VAR, stream_agent_events
+from core.llm.streaming import _parse_sse_chunk, stream_agent_events
 from models.database import get_session
 from services.message_service import add_message, get_messages
 from services.session_service import get_session as get_db_session
@@ -33,8 +30,12 @@ router = APIRouter(prefix="/api/chat")
 
 # Redis TTL for buffered SSE events (seconds)
 _EVENT_BUFFER_TTL = 60
+# Redis TTL for pending messages and active run markers (seconds)
+_RUN_TTL = 300
 # Redis key prefix for event buffers
 _BUFFER_KEY = "sse_buffer:{session_id}:{stream_id}"
+_ACTIVE_RUN_KEY = "active_run:{session_id}"
+_CANCEL_KEY = "cancel:{session_id}:{stream_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -91,14 +92,22 @@ async def submit_message(
 
     stream_id = str(uuid.uuid4())
 
-    # Persist user message
-    await add_message(db, session_id, "user", body.content)
+    # Persist user message. The stream endpoint reads conversation history from
+    # PostgreSQL, so the pending Redis key is only a stream_id handshake.
+    message = await add_message(db, session_id, "user", body.content)
 
     # Store pending message in Redis so the SSE endpoint can pick it up
     r = _redis()
     try:
+        active_key = _ACTIVE_RUN_KEY.format(session_id=session_id)
+        previous_run = await r.get(active_key)
+        if previous_run and previous_run != stream_id:
+            cancel_key = _CANCEL_KEY.format(session_id=session_id, stream_id=previous_run)
+            await r.set(cancel_key, "1", ex=_RUN_TTL)
+        await r.set(active_key, stream_id, ex=_RUN_TTL)
+
         pending_key = f"pending:{session_id}:{stream_id}"
-        await r.set(pending_key, body.content, ex=300)
+        await r.set(pending_key, str(message.id), ex=_RUN_TTL)
     finally:
         await r.aclose()
 
@@ -127,16 +136,18 @@ async def stream_session(
     except ValueError:
         last_event_id = 0
 
-    # Retrieve the pending message content
-    r = _redis()
-    try:
-        pending_key = f"pending:{session_id}:{stream_id}"
-        message_content = await r.get(pending_key)
-        await r.delete(pending_key)
-    finally:
-        await r.aclose()
+    pending_message_id: str | None = None
+    if last_event_id == 0:
+        # Validate the pending stream_id. Conversation history is loaded from DB.
+        r = _redis()
+        try:
+            pending_key = f"pending:{session_id}:{stream_id}"
+            pending_message_id = await r.get(pending_key)
+            await r.delete(pending_key)
+        finally:
+            await r.aclose()
 
-    if message_content is None and last_event_id == 0:
+    if pending_message_id is None and last_event_id == 0:
         raise HTTPException(status_code=404, detail="stream_id not found or already consumed")
 
     buffer_key = _BUFFER_KEY.format(session_id=session_id, stream_id=stream_id)
@@ -145,7 +156,7 @@ async def stream_session(
         _generate_sse(
             session_id=session_id,
             stream_id=stream_id,
-            message_content=message_content,
+            should_run_agent=last_event_id == 0,
             last_event_id=last_event_id,
             buffer_key=buffer_key,
             db=db,
@@ -162,22 +173,22 @@ async def stream_session(
 async def _generate_sse(
     session_id: uuid.UUID,
     stream_id: str,
-    message_content: str | None,
+    should_run_agent: bool,
     last_event_id: int,
     buffer_key: str,
     db: AsyncSession,
     request: Request,
 ) -> AsyncIterator[str]:
     r = _redis()
+    assistant_text_parts: list[str] = []
+    should_persist_assistant = should_run_agent
     try:
         # --- Reconnection: replay buffered events first ---
         if last_event_id > 0:
             replayed = await _replay_events(r, buffer_key, last_event_id)
             for chunk in replayed:
                 yield chunk
-            # If no new message to process, we're done
-            if message_content is None:
-                return
+            return
 
         # --- Fresh stream: run the graph ---
         graph = request.app.state.graph
@@ -189,10 +200,6 @@ async def _generate_sse(
             else _ai_message(m.content)
             for m in history
         ]
-        # The latest user message is already persisted; add it to messages
-        if message_content:
-            lc_messages.append(HumanMessage(content=message_content))
-
         input_state = {
             "messages": lc_messages,
             "turn_id": str(session_id),
@@ -205,9 +212,22 @@ async def _generate_sse(
         }
 
         async for chunk in stream_agent_events(graph, config, input_state):
+            event_type, data = _parse_sse_chunk(chunk)
+            if should_persist_assistant and event_type == "text_delta":
+                content = data.get("content")
+                if isinstance(content, str):
+                    assistant_text_parts.append(content)
+
             # Buffer for reconnection
             await _buffer_event(r, buffer_key, chunk)
             yield chunk
+
+            if should_persist_assistant and event_type == "done":
+                assistant_text = "".join(assistant_text_parts).strip()
+                if assistant_text:
+                    await add_message(db, session_id, "assistant", assistant_text)
+                await _clear_active_run(r, session_id, stream_id)
+                should_persist_assistant = False
 
             # Honour client disconnect
             if await request.is_disconnected():
@@ -220,6 +240,18 @@ async def _generate_sse(
 def _ai_message(content: str):
     from langchain_core.messages import AIMessage
     return AIMessage(content=content)
+
+
+async def _clear_active_run(
+    redis: aioredis.Redis,
+    session_id: uuid.UUID,
+    stream_id: str,
+) -> None:
+    """Clear active_run only if it still points to this stream."""
+    active_key = _ACTIVE_RUN_KEY.format(session_id=session_id)
+    active_run = await redis.get(active_key)
+    if active_run == stream_id:
+        await redis.delete(active_key)
 
 
 # ---------------------------------------------------------------------------

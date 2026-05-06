@@ -21,6 +21,7 @@ import contextvars
 import json
 from typing import AsyncIterator
 
+from langchain_core.messages import AIMessage
 from langgraph.graph.state import CompiledStateGraph
 
 # ---------------------------------------------------------------------------
@@ -115,6 +116,22 @@ def _sse(event_type: str, data: dict, event_id: int) -> str:
     return f"event: {event_type}\ndata: {payload}\nid: {event_id}\n\n"
 
 
+def _parse_sse_chunk(chunk: str) -> tuple[str | None, dict]:
+    event_type: str | None = None
+    data: dict = {}
+    for line in chunk.splitlines():
+        if line.startswith("event: "):
+            event_type = line[len("event: "):].strip()
+        elif line.startswith("data: "):
+            try:
+                parsed = json.loads(line[len("data: "):].strip())
+            except json.JSONDecodeError:
+                parsed = {}
+            if isinstance(parsed, dict):
+                data = parsed
+    return event_type, data
+
+
 # ---------------------------------------------------------------------------
 # Main streaming function
 # ---------------------------------------------------------------------------
@@ -135,6 +152,8 @@ async def stream_agent_events(
 
     event_id = 0
     finish_reason = "stop"
+    saw_chat_model_stream = False
+    emitted_state_texts: set[str] = set()
 
     async def _graph_task() -> None:
         nonlocal finish_reason
@@ -190,8 +209,21 @@ async def stream_agent_events(
                         finish_reason = "stop"
                         continue
 
-                    sse_chunk = _map_langgraph_event(item, event_id)
+                    sse_chunk = _map_langgraph_event(
+                        item,
+                        event_id,
+                        suppress_state_text_delta=saw_chat_model_stream,
+                    )
                     if sse_chunk:
+                        if item.get("event") == "on_chat_model_stream":
+                            saw_chat_model_stream = True
+                        elif item.get("event") == "on_chain_stream":
+                            _, data = _parse_sse_chunk(sse_chunk)
+                            content = data.get("content")
+                            if isinstance(content, str):
+                                if content in emitted_state_texts:
+                                    continue
+                                emitted_state_texts.add(content)
                         event_id += 1
                         yield sse_chunk
 
@@ -212,7 +244,11 @@ async def stream_agent_events(
     yield _sse("done", {"finish_reason": finish_reason}, event_id)
 
 
-def _map_langgraph_event(event: dict, current_id: int) -> str | None:
+def _map_langgraph_event(
+    event: dict,
+    current_id: int,
+    suppress_state_text_delta: bool = False,
+) -> str | None:
     """Map a single LangGraph astream_events v2 event to an SSE string, or None to skip."""
     kind = event.get("event", "")
     name = event.get("name", "")
@@ -229,6 +265,11 @@ def _map_langgraph_event(event: dict, current_id: int) -> str | None:
         if not content:
             return None
         return _sse("text_delta", {"content": content}, current_id + 1)
+
+    if kind == "on_chain_stream" and not suppress_state_text_delta:
+        content = _extract_ai_message_content(event.get("data", {}).get("chunk"))
+        if content:
+            return _sse("text_delta", {"content": content}, current_id + 1)
 
     if kind == "on_tool_start":
         tool_name = name or event.get("data", {}).get("name", "")
@@ -248,6 +289,43 @@ def _map_langgraph_event(event: dict, current_id: int) -> str | None:
         }, current_id + 1)
 
     return None
+
+
+def _extract_ai_message_content(value: object) -> str:
+    """Extract visible assistant text from LangGraph state deltas.
+
+    This is a fallback for nodes that call the project LLM wrapper via ainvoke()
+    instead of a LangChain streaming chat model. Restrict callers to
+    on_chain_stream deltas so full historical state is not replayed as text.
+    """
+    if isinstance(value, AIMessage):
+        return str(value.content or "")
+
+    if isinstance(value, dict):
+        role = value.get("role") or value.get("type")
+        content = value.get("content")
+        if role in {"assistant", "ai"} and isinstance(content, str):
+            return content
+
+        messages = value.get("messages")
+        if isinstance(messages, list):
+            for item in reversed(messages):
+                content = _extract_ai_message_content(item)
+                if content:
+                    return content
+
+        for item in value.values():
+            content = _extract_ai_message_content(item)
+            if content:
+                return content
+
+    if isinstance(value, list):
+        for item in reversed(value):
+            content = _extract_ai_message_content(item)
+            if content:
+                return content
+
+    return ""
 
 
 # ---------------------------------------------------------------------------

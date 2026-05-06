@@ -1198,6 +1198,17 @@ backend/tests/
 
 > ⚠️ 注意：原生 `EventSource` 只能发 GET 请求，因此消息提交和 SSE 订阅必须拆开。FastAPI SSE 响应需设置 `Content-Type: text/event-stream` 和 `Cache-Control: no-cache`，并在每个事件后 flush。断线重连时按 `stream_id` + `Last-Event-ID` 续传，需在内存或 Redis 中短暂缓存最近的事件序列（TTL 60s 即可）。
 
+**C-6.1 后端 Chat/SSE 主链路硬化（E-1 前置）**
+
+> 目标：在开始前端对话界面和 MCP 接入前，先保证后端纯文字对话链路稳定、可复现、可联调。
+
+- [x] 修复消息重复注入风险：`POST /messages` 已入库最新用户消息后，`GET /stream` 构造 LangGraph 输入时不能再次 append 同一条用户消息
+- [x] 补齐 AI 回复持久化：本轮 Agent 结束后，将最终 AI 文本写入 `messages` 表，保证刷新页面和下一轮历史一致
+- [x] 确认并修正 `text_delta` 事件来源：当前 `agent_node` 使用封装后的 `_llm.ainvoke`，可能不会触发 LangGraph `on_chat_model_stream`；需保证 SSE 至少稳定输出文本增量或文本完成事件
+- [x] 实现新消息中断旧 run：同一 `session_id` 收到新消息时，设置上一轮 `cancel:{session_id}:{run_id}` Redis flag，并记录当前 active run
+- [x] 验证 `stream_id == run_id`、pending message、Redis event buffer、`Last-Event-ID` 断线重连的边界行为（`scripts/test_chat_sse_flow.py` 使用真实 Redis/Postgres + fake graph 验证）
+- [x] 增加最小回归验证：纯文字对话一轮可完成，事件序列至少包含文本事件与 `done`，错误时返回 `error` + `done`（`scripts/test_chat_sse_flow.py` 覆盖成功路径；错误路径保留给后续 pytest/服务级测试扩展）
+
 **C-7 Langfuse 集成**
 
 - [ ] 在 `backend/main.py` 初始化 Langfuse（从 dashboard.yaml 读取 host / public_key / secret_key）
@@ -1205,6 +1216,16 @@ backend/tests/
 - [ ] `agent` 节点函数加 `@observe(name="node:agent")`
 - [ ] 节点内用 `langfuse_context.update_current_observation()` 关联 LLM 输入输出
 - [ ] 验证 Langfuse UI 中能看到完整 Trace 树
+
+**C-8 配置与文档漂移修正（D/E 前置）**
+
+> 目标：先修正已发现的实现与文档不一致处，避免后续前端和 MCP 按错误配置继续扩展。
+
+- [ ] Dashboard 后端 provider 列表与图像生成实现对齐：移除残留 `openrouter`，补齐 `grsai` 及其模型选项
+- [ ] Dashboard 前端类型与 UI 补齐 `image_provider.model` 字段，允许用户选择图像生成模型
+- [ ] Dashboard 配置补齐 `embedding` 配置块的读写、默认值、示例文件与前端展示策略
+- [ ] 同步更新 `agent_graph.mmd`，从旧 ReAct 循环图改为当前 `agent` 决策节点 + `rag_gate` + 确定性生成/评估/重试子流程
+- [ ] 核对 `DEV_SPEC.md` 中目录结构与实际文件命名，特别是 `image-rag-mcp/server.py`、`tools/`、`core/pg_client.py`、`core/milvus_client.py`
 
 ---
 
@@ -1274,9 +1295,20 @@ backend/tests/
 
 ## 当前状态
 
-**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成，当前进入 C 阶段（Agent 核心）
+**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；下一步建议做 C-8 配置与文档漂移修正。C-7 Langfuse 可在主链路稳定后补齐，不阻塞 E-1 最小前端对话界面。
+
+**建议执行顺序（2026-05-06 调整）**：
+1. C-6.1：后端 Chat/SSE 主链路硬化，先验证纯文字对话。
+2. C-8：修正 Dashboard、`agent_graph.mmd` 与 `DEV_SPEC.md` 的实现漂移。
+3. E-1：实现最小可用前端对话界面，接入 SSE。
+4. D-1 ~ D-4：实现 image-rag-mcp 图库、Milvus/PG 存储与检索，并替换 `search_similar_cases` stub。
+5. E-2 ~ E-4：参考图上传、生成结果展示、存入图库和全流程联调。
+6. C-7：Langfuse 可观测性集成；如联调排障需要，可提前到 C-8 后执行。
 
 **最近决策记录**：
+- 2026-05-06：新增 `backend/scripts/test_chat_sse_flow.py` 独立联调脚本，连接真实 Docker Postgres/Redis，但使用 fake graph 避免真实 LLM/API 调用；覆盖消息去重、assistant 落库、Redis event buffer、`Last-Event-ID` 保守 replay、active run cancel 语义；在沙箱外运行 `.venv/bin/python scripts/test_chat_sse_flow.py` 通过。
+- 2026-05-06：C-6.1 代码硬化完成：`POST /messages` 继续写 DB，Redis pending key 改为只存 `message_id` 作为 stream_id 首连握手，`GET /stream` 从 DB 最近 20 条构造 Graph 输入且不再追加 pending 内容；SSE 首次运行时收集 `text_delta` 并在 `done` 后写入 assistant 消息，断线重连不落库；新增 `active_run:{session_id}` 和 `cancel:{session_id}:{run_id}`，新消息会取消旧 run；`Last-Event-ID > 0` 采用保守重连语义，只 replay Redis event buffer，不重新运行 Agent；由于当前 `agent_node` 使用 `_llm.ainvoke`，`text_delta` 先用 `on_chain_stream` 中 AIMessage 的完整内容做兜底输出，不是真正逐 token 流式，后续如需打字机效果需单独重构。
+- 2026-05-06：梳理当前架构与技术文档后，决定先不直接进入 D/E 大功能开发；新增 C-6.1 用于修稳后端 Chat/SSE 主链路（消息去重、AI 回复落库、`text_delta` 来源、新消息中断旧 run、断线重连验证），新增 C-8 用于修正 Dashboard provider/model/embedding 配置、`agent_graph.mmd` 和 `DEV_SPEC.md` 的实现漂移；推荐顺序调整为 C-6.1 → C-8 → E-1 → D → E-2/E-3/E-4 → C-7。
 - 2026-05-05：C-6 完成（@observe 留 C-7）：`streaming.py` 用 ContextVar 注入 QueueEmitter，同时消费 `astream_events` 和 emitter queue，映射 7 种 SSE 事件；`chat.py` 两端点（POST 提交消息存 Redis pending key，GET 消费 SSE），stream_id == run_id，Redis 缓冲 TTL 60s 支持 Last-Event-ID 断线重连；`generate_image_node` 从 ContextVar 读取 emitter；chat router 注册到 main.py。
 - 2026-05-05：C-5 完成：评分加权由后端代码计算（LLM 只输出各维度原始分），权重常量写在 `image_evaluator.py` 内；参考图相似度当前为整体综合评分，E 阶段扩展为按用户标注意图（构图/色彩/样式/材质）分维度评估，计划已写入文档；9 个单元测试全部通过。
 - 2026-05-05：C-4 完成：prompt_builder（EnhancedPrompt Pydantic 校验，失败重试 1 次后 fallback）；Celery 方案 A（asyncio.run 包装，迁移方案 B 只改 task 装饰器）；image_generator 引入 SSEEmitter 协议 + NullEmitter 占位，C-6 注入真实 emitter，测试可用 MockEmitter；AgentState 新增 `_enhanced_prompt` / `_current_gen_result` 内部传递字段。
