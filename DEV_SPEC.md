@@ -1402,12 +1402,12 @@ backend/tests/
 
 **E-1 三栏工作台骨架与纯文字对话**
 
-- [ ] 编写 `components/chat/ChatWorkspace.tsx`，落地左中右三栏布局，保持简约白色风格；桌面端三栏固定，窄屏时左/右侧栏可收起
-- [ ] 编写 `components/chat/AppSidebar.tsx`：历史对话列表、知识库入口、首页 `/` 跳转、Dashboard 跳转、折叠/展开
-- [ ] 编写 `components/chat/ChatPanel.tsx` / `MessageList.tsx` / `InputBar.tsx`
-- [ ] 编写 `hooks/useSSE.ts`：消费 `text_delta`、`tool_start/end`、`generation_start/done`、`error`、`done`
-- [ ] 编写 `store/chatStore.ts` 与 `store/workspaceStore.ts` 的最小状态
-- [ ] 验证纯文字对话流程正常，SSE 至少包含文本事件与 `done`
+- [x] 编写 `components/chat/ChatWorkspace.tsx`，落地左中右三栏布局，保持简约白色风格；桌面端三栏固定，窄屏时左/右侧栏可收起
+- [x] 编写 `components/chat/AppSidebar.tsx`：历史对话列表、知识库入口、首页 `/` 跳转、Dashboard 跳转、折叠/展开
+- [x] 编写 `components/chat/ChatPanel.tsx` / `MessageList.tsx` / `InputBar.tsx`
+- [x] 编写 `hooks/useSSE.ts`：消费 `text_delta`、`tool_start/end`、`generation_start/done`、`error`、`done`
+- [x] 编写 `store/chatStore.ts` 与 `store/workspaceStore.ts` 的最小状态
+- [x] 验证纯文字对话流程正常，SSE 至少包含文本事件与 `done`
 
 **E-2 右侧提示词与参考图工作区**
 
@@ -1446,17 +1446,20 @@ backend/tests/
 
 ## 当前状态
 
-**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正。下一步建议做 E-1 三栏工作台骨架；C-7 Langfuse 可在 E-1 后补齐，不阻塞前端主链路搭建。
+**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复。下一步建议做 E-2 右侧提示词与参考图工作区；C-7 Langfuse 仍可后置，不阻塞前端主链路继续演进。
 
 **建议执行顺序（2026-05-06 调整）**：
 1. C-6.1：后端 Chat/SSE 主链路硬化，先验证纯文字对话。
 2. C-8：修正 Dashboard、`agent_graph.mmd` 与 `DEV_SPEC.md` 的实现漂移，并补齐 E 阶段需要的 provider/model/embedding/风格模板配置边界。
-3. E-1：实现三栏工作台骨架和最小可用纯文字对话，接入 SSE。
-4. D-1 ~ D-4：实现 image-rag-mcp 图库、Milvus/PG 存储与检索，并替换 `search_similar_cases` stub。
-5. E-2 ~ E-5：参考图意图上传、提示词/参数/风格工作区、生成图批注下载、存入图库和全流程联调。
-6. C-7：Langfuse 可观测性集成；如联调排障需要，可提前到 C-8 后执行。
+3. E-1：实现三栏工作台骨架和最小可用纯文字对话，接入 SSE。已完成。
+4. E-2：实现右侧提示词/参考图工作区，并扩展消息提交 payload。
+5. E-3 ~ E-5：参数/风格/prompt 同步、生成图批注下载、存入图库和全流程联调。
+6. D-1 ~ D-4：实现 image-rag-mcp 图库、Milvus/PG 存储与检索，并替换 `search_similar_cases` stub。
+7. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-06：E-1 后补充工作台布局交互：中栏与右栏之间增加桌面端拖拽分隔条，用户可直接用鼠标调整右侧工作区宽度；`workspaceStore` 新增 `workspaceWidth` / `workspaceCollapsed`，右栏支持像左侧 Sidebar 一样折叠，并保留窄恢复栏。该能力属于工作台壳层交互，先于 E-2 落地，避免后续在提示词/参考图工作区完成后再返工布局。
+- 2026-05-06：E-1 完成：前端新增 `components/chat/*`、`hooks/useSSE.ts`、`store/chatStore.ts`、`store/workspaceStore.ts`，落地左中右三栏骨架、纯文字多轮对话、SSE 文本/工具/生成事件消费，以及右侧 Prompt/生成图占位标签；`/chat/new` 改为客户端创建真实会话后跳转。为保证刷新和历史可用，后端 `session.py` 新增 `GET /api/sessions` 会话列表与 `GET /api/sessions/{id}` 消息历史返回，前端在进入会话时加载历史消息并渲染左侧历史列表。E-1 仍不包含参考图上传、prompt/参数持久化和批注下载，这些保留到 E-2 以后。
 - 2026-05-06：C-8 完成：`dashboard_service.py` 补齐 `embedding` 默认配置与 provider 列表，image provider 从残留 `openrouter` 改为 `grsai`，并增加 `__main__` 自检入口；`dashboard.py` 接受 `embedding` patch；`dashboard.yaml.example` 补齐 `embedding` 配置块并统一 `grsai` 命名；前端 `types.ts` 增加 `image_provider.model` 与 `embedding` 类型，Dashboard 新增 Embedding tab，图像生成平台配置增加 model 选择；`agent_graph.mmd` 改为当前 `agent -> rag_gate -> enhance_prompt -> generate_image -> evaluate_image -> refine_prompt` 的确定性子流程；`tests/services/test_dashboard_service.py` 更新为 `grsai`/`embedding` 并通过；前端 `npm run lint` 通过。
 - 2026-05-06：前端目标调整为图像生成三栏工作台：左侧 Sidebar（历史对话、知识库、首页跳转、Dashboard、折叠）、中间多轮对话与生成图缩略图、右侧 Workspace 标签页（提示词与参考图 / 生成图片）。参考图上传需支持用户标注参考意图（构图、色彩、建筑样式、材质、光线、环境、其他）；右侧展示并允许编辑 prompt、参数滑块和风格模板；生成图支持预览、下载、Canvas 批注，批注图首版作为新参考图进入下一轮。E 阶段拆分为 E-1 三栏骨架、E-2 参考图工作区、E-3 参数/风格/prompt 同步、E-4 生成图批注下载、E-5 全流程联调。
 - 2026-05-06：新增 `backend/scripts/test_chat_sse_flow.py` 独立联调脚本，连接真实 Docker Postgres/Redis，但使用 fake graph 避免真实 LLM/API 调用；覆盖消息去重、assistant 落库、Redis event buffer、`Last-Event-ID` 保守 replay、active run cancel 语义；在沙箱外运行 `.venv/bin/python scripts/test_chat_sse_flow.py` 通过。

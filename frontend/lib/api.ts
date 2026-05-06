@@ -1,4 +1,11 @@
-import type { DashboardConfig, DashboardConfigPatch, DashboardProviders } from "@/lib/types";
+import type {
+  DashboardConfig,
+  DashboardConfigPatch,
+  DashboardProviders,
+  SessionDetailResponse,
+  SessionResponse,
+  SubmitMessageResponse,
+} from "@/lib/types";
 
 async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, {
@@ -31,4 +38,28 @@ export function updateDashboardConfig(patch: DashboardConfigPatch): Promise<Dash
 
 export function getDashboardProviders(): Promise<DashboardProviders> {
   return requestJson<DashboardProviders>("/api/dashboard/providers");
+}
+
+export function createSession(): Promise<SessionResponse> {
+  return requestJson<SessionResponse>("/api/sessions", {
+    method: "POST",
+  });
+}
+
+export function listSessions(): Promise<SessionResponse[]> {
+  return requestJson<SessionResponse[]>("/api/sessions");
+}
+
+export function getSession(sessionId: string): Promise<SessionDetailResponse> {
+  return requestJson<SessionDetailResponse>(`/api/sessions/${sessionId}`);
+}
+
+export function submitChatMessage(
+  sessionId: string,
+  content: string,
+): Promise<SubmitMessageResponse> {
+  return requestJson<SubmitMessageResponse>(`/api/chat/sessions/${sessionId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
 }

@@ -19,6 +19,13 @@ async def get_session(db: AsyncSession, session_id: uuid.UUID) -> Session | None
     return result.scalar_one_or_none()
 
 
+async def list_sessions(db: AsyncSession, limit: int = 20) -> list[Session]:
+    result = await db.execute(
+        select(Session).order_by(Session.created_at.desc()).limit(limit)
+    )
+    return list(result.scalars().all())
+
+
 async def update_design_state(
     db: AsyncSession, session_id: uuid.UUID, design_state: dict
 ) -> Session | None:
