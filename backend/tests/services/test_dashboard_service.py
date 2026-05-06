@@ -34,6 +34,7 @@ def test_get_config_fills_missing_keys(tmp_path):
     assert config["llm"]["provider"] == "volcengine"
     assert config["llm"]["model"] == dashboard_service.DEFAULT_CONFIG["llm"]["model"]
     assert config["image_provider"] == dashboard_service.DEFAULT_CONFIG["image_provider"]
+    assert config["embedding"] == dashboard_service.DEFAULT_CONFIG["embedding"]
     assert config["langfuse"] == dashboard_service.DEFAULT_CONFIG["langfuse"]
 
 
@@ -48,6 +49,10 @@ def test_update_config_merges_patch_without_overwriting_other_fields(tmp_path):
         "image_provider": {
             "provider": "bailian",
             "api_key": "image-key",
+        },
+        "embedding": {
+            "provider": "volcengine",
+            "api_key": "embedding-key",
         },
         "langfuse": {
             "host": "http://localhost:3000",
@@ -68,6 +73,7 @@ def test_update_config_merges_patch_without_overwriting_other_fields(tmp_path):
     assert updated["llm"]["model"] == "qwen-vl-max"
     assert updated["llm"]["api_key"] == "llm-key"
     assert updated["image_provider"]["api_key"] == "image-key"
+    assert updated["embedding"]["api_key"] == "embedding-key"
 
 
 def test_write_then_read_consistent(tmp_path):
@@ -76,7 +82,8 @@ def test_write_then_read_consistent(tmp_path):
     dashboard_service.CONFIG_PATH = config_path
 
     patch = {
-        "image_provider": {"provider": "openrouter", "api_key": "openrouter-key"},
+        "image_provider": {"provider": "grsai", "model": "gpt-image-1", "api_key": "grsai-key"},
+        "embedding": {"provider": "volcengine", "api_key": "embedding-key"},
         "langfuse": {"host": "http://localhost:3100"},
     }
 
@@ -87,3 +94,14 @@ def test_write_then_read_consistent(tmp_path):
         dashboard_service.CONFIG_PATH = original
 
     assert read_back == written
+
+
+def test_get_providers_matches_supported_clients():
+    providers = dashboard_service.get_providers()
+
+    image_provider_ids = {item["id"] for item in providers["image_provider"]}
+    assert image_provider_ids == {"bailian", "volcengine", "grsai"}
+    assert "openrouter" not in image_provider_ids
+
+    embedding_provider_ids = {item["id"] for item in providers["embedding"]}
+    assert embedding_provider_ids == {"volcengine"}

@@ -33,11 +33,19 @@ class LangfuseConfigPatch(BaseModel):
     secret_key: str | None = None
 
 
+class EmbeddingConfigPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str | None = None
+    api_key: str | None = None
+
+
 class DashboardConfigUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     llm: LLMConfigPatch | None = None
     image_provider: ImageProviderConfigPatch | None = None
+    embedding: EmbeddingConfigPatch | None = None
     langfuse: LangfuseConfigPatch | None = None
 
 

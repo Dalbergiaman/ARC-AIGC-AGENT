@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { updateDashboardConfig, getDashboardConfig, getDashboardProviders } from "@/lib/api";
 import type { DashboardConfig, DashboardConfigPatch, DashboardProviders } from "@/lib/types";
+import { EmbeddingConfig } from "@/components/dashboard/EmbeddingConfig";
 import { ImageProviderConfig } from "@/components/dashboard/ImageProviderConfig";
 import { LangfuseConfig } from "@/components/dashboard/LangfuseConfig";
 import { ModelSelector } from "@/components/dashboard/ModelSelector";
@@ -15,11 +16,12 @@ function mergePatch(config: DashboardConfig, patch: DashboardConfigPatch): Dashb
     ...config,
     llm: { ...config.llm, ...(patch.llm ?? {}) },
     image_provider: { ...config.image_provider, ...(patch.image_provider ?? {}) },
+    embedding: { ...config.embedding, ...(patch.embedding ?? {}) },
     langfuse: { ...config.langfuse, ...(patch.langfuse ?? {}) },
   };
 }
 
-type SettingsTab = "model" | "langfuse";
+type SettingsTab = "model" | "embedding" | "langfuse";
 
 export default function DashboardPage() {
   const [config, setConfig] = useState<DashboardConfig | null>(null);
@@ -116,6 +118,15 @@ export default function DashboardPage() {
             </button>
             <button
               type="button"
+              onClick={() => setActiveTab("embedding")}
+              className={`w-full rounded-md px-3 py-2 text-left text-sm ${
+                activeTab === "embedding" ? "bg-accent font-medium" : "text-muted-foreground"
+              }`}
+            >
+              Embedding
+            </button>
+            <button
+              type="button"
               onClick={() => setActiveTab("langfuse")}
               className={`w-full rounded-md px-3 py-2 text-left text-sm ${
                 activeTab === "langfuse" ? "bg-accent font-medium" : "text-muted-foreground"
@@ -135,6 +146,10 @@ export default function DashboardPage() {
               <ModelSelector config={config} providers={providers} onPatch={handlePatch} />
               <ImageProviderConfig config={config} providers={providers} onPatch={handlePatch} />
             </div>
+          )}
+
+          {canRenderForm && config && providers && activeTab === "embedding" && (
+            <EmbeddingConfig config={config} providers={providers} onPatch={handlePatch} />
           )}
 
           {canRenderForm && config && activeTab === "langfuse" && (

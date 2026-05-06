@@ -6,6 +6,12 @@ export type LLMConfig = {
 
 export type ImageProviderConfig = {
   provider: string;
+  model: string;
+  api_key: string;
+};
+
+export type EmbeddingConfig = {
+  provider: string;
   api_key: string;
 };
 
@@ -18,12 +24,14 @@ export type LangfuseConfig = {
 export type DashboardConfig = {
   llm: LLMConfig;
   image_provider: ImageProviderConfig;
+  embedding: EmbeddingConfig;
   langfuse: LangfuseConfig;
 };
 
 export type DashboardConfigPatch = {
   llm?: Partial<LLMConfig>;
   image_provider?: Partial<ImageProviderConfig>;
+  embedding?: Partial<EmbeddingConfig>;
   langfuse?: Partial<LangfuseConfig>;
 };
 
@@ -36,9 +44,11 @@ export type LLMProviderOption = {
 export type ImageProviderOption = {
   id: string;
   label: string;
+  models: string[];
 };
 
 export type DashboardProviders = {
   llm: LLMProviderOption[];
   image_provider: ImageProviderOption[];
+  embedding: LLMProviderOption[];
 };

@@ -15,7 +15,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "image_provider": {
         "provider": "bailian",
-        "model": "wan2.7-image-pro",
+        "model": "wanx2.1-t2i-turbo",
+        "api_key": "",
+    },
+    "embedding": {
+        "provider": "volcengine",
         "api_key": "",
     },
     "langfuse": {
@@ -46,9 +50,16 @@ PROVIDERS: dict[str, Any] = {
             "models": ["doubao-seedream-3-0-t2i-250415"],
         },
         {
-            "id": "openrouter",
-            "label": "OpenRouter",
-            "models": ["google/gemini-2.5-flash-image-preview"],
+            "id": "grsai",
+            "label": "GrsAI",
+            "models": ["gpt-image-1", "nano-banana"],
+        },
+    ],
+    "embedding": [
+        {
+            "id": "volcengine",
+            "label": "Volcengine",
+            "models": ["doubao-embedding", "doubao-embedding-vision-251215"],
         },
     ],
 }
@@ -94,3 +105,25 @@ def update_config(patch: dict[str, Any]) -> dict[str, Any]:
 
 def get_providers() -> dict[str, Any]:
     return deepcopy(PROVIDERS)
+
+
+if __name__ == "__main__":
+    config = get_config()
+    providers = get_providers()
+
+    print("Dashboard config sections:", ", ".join(config.keys()))
+    print("LLM provider:", config["llm"]["provider"], config["llm"]["model"])
+    print(
+        "Image provider:",
+        config["image_provider"]["provider"],
+        config["image_provider"]["model"],
+    )
+    print("Embedding provider:", config["embedding"]["provider"])
+    print(
+        "Image provider options:",
+        ", ".join(item["id"] for item in providers["image_provider"]),
+    )
+    print(
+        "Embedding provider options:",
+        ", ".join(item["id"] for item in providers["embedding"]),
+    )

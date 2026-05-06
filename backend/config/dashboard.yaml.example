@@ -7,8 +7,12 @@ llm:
   api_key: your-api-key-here
 
 image_provider:
-  provider: bailian        # bailian | volcengine | GrsAI
+  provider: bailian        # bailian | volcengine | grsai
   model: wanx2.1-t2i-turbo
+  api_key: your-api-key-here
+
+embedding:
+  provider: volcengine     # currently only volcengine
   api_key: your-api-key-here
 
 langfuse:
