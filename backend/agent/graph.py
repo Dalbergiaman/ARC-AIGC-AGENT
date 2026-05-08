@@ -62,12 +62,34 @@ async def agent_node(state: AgentState) -> dict:
     style_keywords = None
     updates: dict = {}
 
-    # --- Rule 1: analyze any new image URLs in the latest message ---
-    image_urls = _extract_image_urls(messages)
-    known_urls = {r.get("image_url") for r in reference_images}
-    new_urls = [u for u in image_urls if u not in known_urls]
+    # --- Rule 1: analyze images that have a URL but no description yet ---
+    # Pre-filled entries from input_state have image_url + intent/note but no VLM analysis.
+    # Also pick up any URLs embedded in message text as a fallback.
+    known_analyzed = {r.get("image_url") for r in reference_images if r.get("description")}
+    pending_urls = [
+        r.get("image_url") for r in reference_images
+        if r.get("image_url") and not r.get("description")
+    ]
+    text_urls = _extract_image_urls(messages)
+    # Add text-extracted URLs not already tracked at all
+    all_tracked = {r.get("image_url") for r in reference_images}
+    for u in text_urls:
+        if u not in all_tracked:
+            pending_urls.append(u)
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    new_urls = [u for u in pending_urls if u and not (u in seen or seen.add(u))]  # type: ignore[func-returns-value]
+
     for url in new_urls:
         analysis = await analyze_reference_image.ainvoke({"image_url": url})
+        # Merge user-annotated intent/note from any pre-filled entry for this URL
+        pre = next((r for r in reference_images if r.get("image_url") == url), {})
+        if pre.get("reference_intent"):
+            analysis["reference_intent"] = pre["reference_intent"]
+        if pre.get("intent_note"):
+            analysis["intent_note"] = pre["intent_note"]
+        # Replace the pre-filled stub (or append if new)
+        reference_images = [r for r in reference_images if r.get("image_url") != url]
         reference_images.append(analysis)
         # Pre-fill design_state from image analysis if fields are empty
         for field in ("building_type", "style", "facade_material", "lighting", "viewpoint"):

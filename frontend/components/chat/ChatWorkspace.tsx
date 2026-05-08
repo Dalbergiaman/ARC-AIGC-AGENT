@@ -1,7 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PanelRightClose, PanelRightOpen } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { deleteSession, getSession, listSessions, submitChatMessage } from "@/lib/api";
@@ -10,6 +9,7 @@ import { useChatStore } from "@/store/chatStore";
 import { useWorkspaceStore } from "@/store/workspaceStore";
 import { AppSidebar } from "@/components/chat/AppSidebar";
 import { ChatPanel } from "@/components/chat/ChatPanel";
+import { WorkspacePanel } from "@/components/workspace/WorkspacePanel";
 import type { SessionResponse } from "@/lib/types";
 
 type Props = {
@@ -71,7 +71,13 @@ export function ChatWorkspace({ sessionId }: Props) {
     workspaceWidthRatio,
     toggleWorkspace,
     setWorkspaceWidthRatio,
+    getReferenceImages,
+    promptDraft,
+    negativePromptDraft,
+    updateReferenceImage,
   } = useWorkspaceStore();
+
+  const referenceImages = getReferenceImages(sessionId);
 
   const refreshSessions = useCallback(async () => {
     const sessionItems = await listSessions();
@@ -190,8 +196,30 @@ export function ChatWorkspace({ sessionId }: Props) {
     addUserMessage(content);
     beginAssistantMessage();
 
+    // Build payload — only include images not yet sent
+    const readyImages = referenceImages.filter((img) => !img.uploading && !img.error && img.url && !img.sent);
+    const payload = {
+      content,
+      ...(readyImages.length > 0 && {
+        reference_images: readyImages.map((img) => ({
+          file_id: img.fileId,
+          url: img.url,
+          intent: img.intent,
+          note: img.note ?? "",
+        })),
+      }),
+      ...((promptDraft || negativePromptDraft) && {
+        workspace: {
+          prompt: promptDraft,
+          negative_prompt: negativePromptDraft,
+        },
+      }),
+    };
+
     try {
-      const response = await submitChatMessage(sessionId, content);
+      const response = await submitChatMessage(sessionId, payload);
+      // Mark submitted images as sent (keep them visible, don't clear)
+      readyImages.forEach((img) => updateReferenceImage(sessionId, img.fileId, { sent: true }));
       setStreamId(response.stream_id);
       setStreamState("streaming");
     } catch (error) {
@@ -225,124 +253,19 @@ export function ChatWorkspace({ sessionId }: Props) {
     [refreshSessions, router, sessionId, setErrorMessage],
   );
 
-  const workspacePanel = useMemo(() => {
-    if (workspaceCollapsed) {
-      return (
-        <aside className="hidden w-14 shrink-0 border-l border-black/6 bg-white xl:flex xl:flex-col">
-          <div className="flex flex-1 flex-col items-center gap-3 px-2 py-4">
-            <button
-              type="button"
-              onClick={toggleWorkspace}
-              className="inline-flex size-9 items-center justify-center rounded-md border border-black/8 bg-white text-muted-foreground hover:bg-black/[0.04] hover:text-foreground"
-              aria-label="展开工作区"
-            >
-              <PanelRightOpen className="size-4" />
-            </button>
-            <div className="writing-mode-vertical text-xs text-muted-foreground [writing-mode:vertical-rl] [text-orientation:mixed]">
-              工作区
-            </div>
-          </div>
-        </aside>
-      );
-    }
-
-    return (
-      <>
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="调整工作区宽度"
-          onPointerDown={handleWorkspaceResizeStart}
-          className={`hidden w-1 shrink-0 cursor-col-resize bg-transparent transition-colors xl:block ${
-            isResizingWorkspace ? "bg-black/8" : "hover:bg-black/[0.05]"
-          }`}
-        />
-        <aside
-          className="hidden shrink-0 border-l border-black/6 bg-white xl:flex xl:flex-col"
-          style={{ width: `${workspaceWidthRatio * 100}%` }}
-        >
-          <div className="flex h-[72px] items-center justify-between gap-3 border-b border-black/6 px-4 py-4">
-            <div>
-              <div className="text-sm font-semibold">工作区</div>
-              <div className="text-xs text-muted-foreground">E-1 先落三栏骨架和纯文字对话</div>
-            </div>
-            <button
-              type="button"
-              onClick={toggleWorkspace}
-              className="inline-flex size-8 items-center justify-center rounded-md border border-black/8 bg-white text-muted-foreground hover:bg-black/[0.04] hover:text-foreground"
-              aria-label="折叠工作区"
-            >
-              <PanelRightClose className="size-4" />
-            </button>
-          </div>
-
-          <div className="flex gap-2 border-b border-black/6 px-4 py-3">
-            <button
-              type="button"
-              onClick={() => setActiveTab("prompt")}
-              className={`rounded-md px-3 py-1.5 text-sm ${
-                activeTab === "prompt" ? "bg-black text-white" : "border border-black/8 bg-white"
-              }`}
-            >
-              提示词
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab("images")}
-              className={`rounded-md px-3 py-1.5 text-sm ${
-                activeTab === "images" ? "bg-black text-white" : "border border-black/8 bg-white"
-              }`}
-            >
-              生成图片
-            </button>
-          </div>
-
-          <div className="flex-1 px-4 py-4">
-            {activeTab === "prompt" ? (
-              <div className="space-y-4">
-                <div className="rounded-xl border border-black/8 bg-white p-4">
-                  <div className="text-sm font-medium">Prompt 工作区</div>
-                  <div className="mt-2 text-sm text-muted-foreground">
-                    E-1 只提供三栏结构，占位等待 E-2/E-3 接入提示词、参考图和参数滑块。
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {generationPreviews.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-black/8 bg-white p-4 text-sm text-muted-foreground">
-                    生成结果会在这里出现
-                  </div>
-                ) : (
-                  generationPreviews
-                    .filter((item) => item.imageUrl)
-                    .map((item) => (
-                      <div key={item.taskId} className="overflow-hidden rounded-xl border border-black/8 bg-white">
-                        {/* Generated images may come from arbitrary remote providers; keep raw img in E-1. */}
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={item.imageUrl} alt="生成结果" className="h-44 w-full object-cover" />
-                        <div className="border-t border-black/6 px-3 py-2 text-xs text-muted-foreground">
-                          {item.taskId}
-                        </div>
-                      </div>
-                    ))
-                )}
-              </div>
-            )}
-          </div>
-        </aside>
-      </>
-    );
-  }, [
-    activeTab,
-    generationPreviews,
-    handleWorkspaceResizeStart,
-    isResizingWorkspace,
-    setActiveTab,
-    toggleWorkspace,
-    workspaceCollapsed,
-    workspaceWidthRatio,
-  ]);
+  const workspacePanel = (
+    <WorkspacePanel
+      sessionId={sessionId}
+      activeTab={activeTab}
+      collapsed={workspaceCollapsed}
+      widthRatio={workspaceWidthRatio}
+      generationPreviews={generationPreviews.filter((item) => item.imageUrl)}
+      isResizing={isResizingWorkspace}
+      onTabChange={setActiveTab}
+      onToggle={toggleWorkspace}
+      onResizeStart={handleWorkspaceResizeStart}
+    />
+  );
 
   return (
     <div

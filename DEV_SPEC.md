@@ -1412,20 +1412,26 @@ backend/tests/
 
 **E-2 右侧提示词与参考图工作区**
 
-- [ ] 编写 `components/workspace/WorkspacePanel.tsx`，提供"提示词与参考图"、"生成图片"两个标签页
-- [ ] 编写 `PromptReferenceTab.tsx`：顶部 prompt / negative prompt 展示与手动编辑
-- [ ] 编写 `ImageUploader.tsx` + `ReferenceIntentPicker.tsx`：上传参考图后必须选择参考意图（构图 / 色彩 / 建筑样式 / 材质 / 光线 / 环境 / 其他）和可选说明
-- [ ] 扩展 `POST /api/chat/sessions/{session_id}/messages` 请求体，支持 `reference_images` 与 `workspace` payload
-- [ ] 后端将 `intent` / `note` 写入 `ReferenceImageAnalysis.reference_intent` / `intent_note`
-- [ ] 验证 Agent 收到图片后触发 `analyze_reference_image`，并保留用户标注的参考意图
+- [x] 编写 `components/workspace/WorkspacePanel.tsx`，提供"提示词与参考图"、"生成图片"两个标签页
+- [x] 编写 `PromptReferenceTab.tsx`：顶部 prompt / negative prompt 展示与手动编辑
+- [x] 编写参考图上传组件（内嵌于 `PromptReferenceTab`）+ 意图选择下拉：上传参考图后必须选择参考意图（构图 / 色彩 / 建筑样式 / 材质 / 光线 / 环境 / 其他）和可选说明
+- [x] 扩展 `POST /api/chat/sessions/{session_id}/messages` 请求体，支持 `reference_images` 与 `workspace` payload
+- [x] 后端将 `intent` / `note` 预填入 `input_state["reference_images"]`，`agent_node` 分析后合并 intent/note
+- [x] `ReferenceImageAnalysis` 新增 `reference_intent` / `intent_note` 字段
+- [x] 参考图发送后标记 `sent: true`，保持显示在右侧，已发送的图禁止修改意图；下次发消息只发未发送的图
+- [x] 参考图列表按 sessionId 存 localStorage，刷新/切换 session 后恢复，session 间相互隔离
+- [x] 本地开发环境参考图转 base64 传给 VLM（`image_analysis.py` 的 `_to_data_url`），解决 VLM 无法访问 localhost URL 的问题；生产环境 MinIO 接入后图片有公网 URL，可直接传 URL
+- [x] 验证 Agent 收到图片后触发 `analyze_reference_image`，并保留用户标注的参考意图
 
 **E-3 参数滑块、风格模板与 prompt 实时同步**
 
+- [ ] 后端 `enhance_prompt_node` / `refine_prompt_node` 执行完后通过 `QueueEmitter` 推送 `prompt_update` SSE 事件（含 `prompt`、`negative_prompt`、`source`）
+- [ ] 前端 `useSSE` 新增 `onPromptUpdate` 回调，消费 `prompt_update` 事件，更新 `workspaceStore.promptDraft` / `negativePromptDraft`
+- [ ] `SSEEventPayloadMap` / `SSEEventType` 补充 `prompt_update` 类型
 - [ ] 编写 `GenerationControls.tsx`：`temperature`、`lightingIntensity`、`stylization`、`materialStrength`、`compositionStrength` 滑块/输入框
 - [ ] 从 `prompt_templates.py` 对齐前端风格模板数据源；优先后端新增接口输出模板，避免前后端手写两份长期漂移
 - [ ] 用户选择风格模板后写入 `workspaceStore.selectedStyle`，并随下一条消息提交给 Agent
-- [ ] 如右侧 prompt 需要稳定实时刷新，后端补充 SSE `prompt_update` 事件；否则 E-3 先以用户草稿 + 生成流程结果展示为准
-- [ ] 验证用户编辑 prompt / 参数 / 风格后，下一轮 Agent 能在上下文中读取这些内容
+- [ ] 验证：Agent 生成 prompt 后右侧实时更新；用户手动编辑 prompt 后下一轮 Agent 能在上下文中读取
 
 **E-4 生成图片工作区、批注与下载**
 
@@ -1447,18 +1453,19 @@ backend/tests/
 
 ## 当前状态
 
-**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复。下一步建议做 E-2 右侧提示词与参考图工作区；C-7 Langfuse 仍可后置，不阻塞前端主链路继续演进。
+**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 主体已完成（参考图上传/意图/发送标记/payload 扩展），待补参考图 localStorage 持久化与端到端验证。下一步：补齐 E-2 参考图持久化，然后做 E-3 prompt 实时同步。
 
-**建议执行顺序（2026-05-06 调整）**：
-1. C-6.1：后端 Chat/SSE 主链路硬化，先验证纯文字对话。
-2. C-8：修正 Dashboard、`agent_graph.mmd` 与 `DEV_SPEC.md` 的实现漂移，并补齐 E 阶段需要的 provider/model/embedding/风格模板配置边界。
-3. E-1：实现三栏工作台骨架和最小可用纯文字对话，接入 SSE。已完成。
-4. E-2：实现右侧提示词/参考图工作区，并扩展消息提交 payload。
-5. E-3 ~ E-5：参数/风格/prompt 同步、生成图批注下载、存入图库和全流程联调。
-6. D-1 ~ D-4：实现 image-rag-mcp 图库、Milvus/PG 存储与检索，并替换 `search_similar_cases` stub。
-7. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
+**建议执行顺序（2026-05-08 调整）**：
+1. ~~C-6.1~~、~~C-8~~、~~E-1~~：已完成。
+2. E-2 收尾：参考图列表按 sessionId 存 localStorage，刷新/切换 session 后恢复。
+3. E-3：后端补 `prompt_update` SSE 事件；前端消费并更新右侧 prompt 草稿；参数滑块与风格模板。
+4. E-4 ~ E-5：生成图批注下载、存入图库、全流程联调。
+5. D-1 ~ D-4：image-rag-mcp 图库、Milvus/PG 存储与检索，替换 `search_similar_cases` stub。
+6. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-08：E-2 参考图持久化策略：参考图列表是前端草稿状态，不需要后端持久化；以 `sessionId` 为 key 存 `localStorage`，切换/刷新后恢复。已发送的图标记 `sent: true` 保持显示，用户手动删除才消失；下次发消息只发 `sent === false` 的图，避免重复提交给 Agent。
+- 2026-05-08：E-3 prompt 实时同步策略：后端在 `enhance_prompt_node` / `refine_prompt_node` 完成后通过 `QueueEmitter` 推送 `prompt_update` SSE 事件（含 `prompt`、`negative_prompt`、`source` 字段）；前端消费后更新 `workspaceStore.promptDraft` / `negativePromptDraft`；用户手动编辑 prompt 后随下一条消息的 `workspace` payload 传给 Agent，Agent 能在 HumanMessage 上下文中读取。用户修改 prompt 注入 Agent 的链路在 E-2 已实现，E-3 补齐 Agent → 前端的反向同步。
 - 2026-05-06：完成 `sessions.title` schema 漂移修复：当前后端 SQLAlchemy `Session` 模型、`create_session` 逻辑和前端会话列表均已依赖 `title` 字段，但 FastAPI 启动阶段使用的 `Base.metadata.create_all()` 只能创建缺失表，不能为已存在的 `sessions` 表自动补列，导致旧开发库在访问 `/chat/new` 时插入 `title` 失败。现已在 `backend/models/schema_guard.py` 增加启动期 schema guard，并在 FastAPI lifespan 中于 `create_all()` 后执行；当检测到旧 `sessions` 表缺少 `title` 列时，自动执行 `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS title VARCHAR(255) NOT NULL DEFAULT 'Unnamed Chat';` 补齐结构。补充单元测试覆盖“表不存在 / 列已存在 / 缺列自动补齐”三种场景。验收标准保持不变：旧数据库不删库重启后可成功 `POST /api/sessions`，`GET /api/sessions` 返回 `title`，前端进入 `/chat/new` 不再触发 `column "title" does not exist`。
 - 2026-05-06：工作台右侧栏宽度改为按整体比例存储与拖拽，而非固定像素宽度；`workspaceStore` 使用 `workspaceWidthRatio` 表示工作区占聊天页容器的比例，拖拽分隔条时根据当前容器宽度实时换算。为避免右栏挤压主对话区，当前允许范围设为 `22%` 到 `50%`，从而支持用户将右侧工作区拉大到页面一半，同时在窗口尺寸变化时保持相对布局稳定。
 - 2026-05-06：中栏会话头部标题与左侧 Sidebar 历史对话名称对齐，统一使用会话详情/会话列表返回的 `sessions.title` 展示，不再直接显示 `sessionId`。`ChatWorkspace` 负责维护当前会话标题：初次进入会话时从 `getSession` 返回值设置，后续当 `listSessions` 刷新到异步生成的新标题后，同步更新中栏标题，避免左中两处名称不一致。

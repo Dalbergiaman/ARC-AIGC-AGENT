@@ -4,6 +4,7 @@ import type {
   DashboardProviders,
   SessionDetailResponse,
   SessionResponse,
+  SubmitMessagePayload,
   SubmitMessageResponse,
 } from "@/lib/types";
 
@@ -73,10 +74,10 @@ export async function deleteSession(sessionId: string): Promise<void> {
 
 export function submitChatMessage(
   sessionId: string,
-  content: string,
+  payload: SubmitMessagePayload,
 ): Promise<SubmitMessageResponse> {
   return requestJson<SubmitMessageResponse>(`/api/chat/sessions/${sessionId}/messages`, {
     method: "POST",
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(payload),
   });
 }

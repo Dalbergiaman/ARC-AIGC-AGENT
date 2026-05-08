@@ -10,6 +10,7 @@ GET /api/chat/sessions/{session_id}/stream?stream_id=<uuid>
 """
 from __future__ import annotations
 
+import json
 import uuid
 from typing import AsyncIterator
 
@@ -77,8 +78,22 @@ async def _replay_events(
 # POST — submit message
 # ---------------------------------------------------------------------------
 
+class ReferenceImagePayload(BaseModel):
+    file_id: str
+    url: str
+    intent: str
+    note: str = ""
+
+
+class WorkspacePayload(BaseModel):
+    prompt: str = ""
+    negative_prompt: str = ""
+
+
 class MessageRequest(BaseModel):
     content: str
+    reference_images: list[ReferenceImagePayload] = []
+    workspace: WorkspacePayload | None = None
 
 
 @router.post("/sessions/{session_id}/messages")
@@ -109,6 +124,14 @@ async def submit_message(
 
         pending_key = f"pending:{session_id}:{stream_id}"
         await r.set(pending_key, str(message.id), ex=_RUN_TTL)
+
+        # Store reference images and workspace draft for the SSE endpoint
+        if body.reference_images:
+            ref_key = f"ref_images:{session_id}:{stream_id}"
+            await r.set(ref_key, json.dumps([img.model_dump() for img in body.reference_images]), ex=_RUN_TTL)
+        if body.workspace and body.workspace.prompt:
+            ws_key = f"workspace:{session_id}:{stream_id}"
+            await r.set(ws_key, json.dumps(body.workspace.model_dump()), ex=_RUN_TTL)
     finally:
         await r.aclose()
 
@@ -201,11 +224,44 @@ async def _generate_sse(
             else _ai_message(m.content)
             for m in history
         ]
-        input_state = {
+
+        # Read reference images and workspace draft stored by submit_message
+        ref_images_raw = await r.get(f"ref_images:{session_id}:{stream_id}")
+        workspace_raw = await r.get(f"workspace:{session_id}:{stream_id}")
+
+        # Pre-fill reference_images in input_state (url + intent/note; description filled by agent_node)
+        pending_ref_images: list[dict] = []
+        if ref_images_raw:
+            base = str(request.base_url).rstrip("/")
+            for img in json.loads(ref_images_raw):
+                url = img["url"]
+                # Convert relative paths to absolute so VLM can fetch the image
+                if url.startswith("/"):
+                    url = f"{base}{url}"
+                pending_ref_images.append({
+                    "image_url": url,
+                    "reference_intent": img.get("intent", ""),
+                    "intent_note": img.get("note", ""),
+                })
+
+        # Append workspace prompt draft to the last HumanMessage so Agent can see it
+        if workspace_raw and lc_messages:
+            ws = json.loads(workspace_raw)
+            prompt_draft = ws.get("prompt", "").strip()
+            if prompt_draft:
+                last = lc_messages[-1]
+                if isinstance(last, HumanMessage):
+                    lc_messages[-1] = HumanMessage(
+                        content=f"{last.content}\n[用户草稿 prompt: {prompt_draft}]"
+                    )
+
+        input_state: dict = {
             "messages": lc_messages,
             "turn_id": str(session_id),
             "run_id": stream_id,
         }
+        if pending_ref_images:
+            input_state["reference_images"] = pending_ref_images
 
         config = {
             "configurable": {"thread_id": str(session_id)},

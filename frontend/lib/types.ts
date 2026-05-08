@@ -99,3 +99,36 @@ export type SSEEventPayloadMap = {
 export type SSEEventType = keyof SSEEventPayloadMap;
 
 export type WorkspaceTab = "prompt" | "images";
+
+export type ReferenceIntent =
+  | "composition"
+  | "color"
+  | "style"
+  | "material"
+  | "lighting"
+  | "surroundings"
+  | "other";
+
+export type ReferenceImageDraft = {
+  fileId: string;
+  url: string;
+  intent: ReferenceIntent;
+  note?: string;
+  uploading?: boolean;
+  error?: string;
+  sent?: boolean;  // true after the image has been submitted in a message
+};
+
+export type SubmitMessagePayload = {
+  content: string;
+  reference_images?: Array<{
+    file_id: string;
+    url: string;
+    intent: ReferenceIntent;
+    note?: string;
+  }>;
+  workspace?: {
+    prompt: string;
+    negative_prompt: string;
+  };
+};
