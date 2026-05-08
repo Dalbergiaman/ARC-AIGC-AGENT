@@ -25,25 +25,28 @@ export function ChatPanel({
   onSubmit,
 }: Props) {
   return (
-    <section className="flex min-h-0 flex-1 flex-col bg-white">
-      <header className="flex h-[72px] flex-col justify-center border-b border-black/6 bg-white px-6 py-4">
+    <section className="grid h-full min-h-0 flex-1 grid-rows-[72px_minmax(0,1fr)_auto] overflow-hidden bg-white">
+      <header className="flex min-h-0 flex-col justify-center border-b border-black/6 bg-white px-6 py-4">
         <div className="text-sm font-semibold">{sessionTitle}</div>
         <div className="text-xs text-muted-foreground">
           {streamState === "streaming" ? "模型正在回复" : "纯文字对话主链路"}
         </div>
       </header>
 
-      {errorMessage ? (
-        <div className="border-b bg-red-50 px-6 py-3 text-sm text-red-700">{errorMessage}</div>
-      ) : null}
+      <div className="flex min-h-0 flex-col overflow-hidden">
+        {errorMessage ? (
+          <div className="shrink-0 border-b bg-red-50 px-6 py-3 text-sm text-red-700">{errorMessage}</div>
+        ) : null}
+        <MessageList
+          messages={messages}
+          activeToolStatus={activeToolStatus}
+          generationPreviews={generationPreviews}
+        />
+      </div>
 
-      <MessageList
-        messages={messages}
-        activeToolStatus={activeToolStatus}
-        generationPreviews={generationPreviews}
-      />
-
-      <InputBar disabled={streamState === "submitting" || streamState === "streaming"} onSubmit={onSubmit} />
+      <div className="min-h-0">
+        <InputBar disabled={streamState === "submitting" || streamState === "streaming"} onSubmit={onSubmit} />
+      </div>
     </section>
   );
 }

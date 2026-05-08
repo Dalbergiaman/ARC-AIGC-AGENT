@@ -30,7 +30,7 @@ export function WorkspacePanel({
 }: Props) {
   if (collapsed) {
     return (
-      <aside className="hidden w-14 shrink-0 border-l border-black/6 bg-white xl:flex xl:flex-col">
+      <aside className="hidden h-full min-h-0 w-14 shrink-0 overflow-hidden border-l border-black/6 bg-white xl:flex xl:flex-col">
         <div className="flex flex-1 flex-col items-center gap-3 px-2 py-4">
           <button
             type="button"
@@ -60,11 +60,11 @@ export function WorkspacePanel({
         }`}
       />
       <aside
-        className="hidden shrink-0 border-l border-black/6 bg-white xl:flex xl:flex-col"
+        className="hidden h-full min-h-0 shrink-0 overflow-hidden border-l border-black/6 bg-white xl:flex xl:flex-col"
         style={{ width: `${widthRatio * 100}%` }}
       >
         {/* Header */}
-        <div className="flex h-[72px] items-center justify-between gap-3 border-b border-black/6 px-4">
+        <div className="flex h-[72px] shrink-0 items-center justify-between gap-3 border-b border-black/6 px-4">
           <div className="flex gap-2">
             <button
               type="button"

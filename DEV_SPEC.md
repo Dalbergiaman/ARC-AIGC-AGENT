@@ -299,6 +299,7 @@ Agent 不完全依赖 ReAct 自由调用完整生成链路。单一 `agent` 节�
 - `store_generated_image` 不是 Agent 工具，由前端图片卡片下方的「存入图库」按钮触发，调用独立 REST 接口 `POST /api/library/store`，后端直接调 MCP，不经过 Agent。
 - 每轮用户消息创建新的 `turn_id` 和 `run_id`；`retry_count`、`best_generation_result`、`current_task_id` 只作用于当前生成任务，新生成意图开始时重置。
 - `agent` 可自主调用轻量工具（如 `analyze_reference_image`、`lookup_style_keywords`、`search_similar_cases`），但图像生成、评估、重试由确定性子流程控制。
+- 图像生成入口由后端显式用户意图规则硬把关：只有用户最新一轮消息明确要求生成 / 出图 / 渲染（含 generate / render / create image 等英文命令）时，才允许 `ready_to_generate` 进入生成子流程；LLM 输出的 `ready_to_generate` 不能单独触发生成，且“不要生成 / 先不生成 / do not generate”等否定表达优先拦截。
 - 所有会影响控制流的 LLM 输出必须通过 Pydantic schema 校验；解析失败时返回可恢复错误或走保守兜底。
 
 **工具说明**
@@ -346,6 +347,7 @@ session_id 在整个对话窗口内不变；run_id 每轮 Agent 执行生成一�
 | `tool_end` | 工具调用完成 | `{"tool": "...", "summary": "用户友好的一句话摘要"}` |
 | `generation_start` | 图像生成任务提交 | `{"task_id": "xxx", "run_id": "..."}` |
 | `generation_done` | 图像生成完成 | `{"task_id": "xxx", "image_url": "...", "run_id": "..."}` |
+| `prompt_update` | `enhance_prompt` / `refine_prompt` 得到结构化 prompt 后 | `{"prompt": "...", "negative_prompt": "...", "source": "enhance_prompt \| refine_prompt"}` |
 | `error` | 发生错误 | `{"code": "GENERATION_TIMEOUT", "message": "..."}` |
 | `done` | 本轮响应结束 | `{"finish_reason": "stop \| max_retries \| interrupted"}` |
 
@@ -364,6 +366,7 @@ session_id 在整个对话窗口内不变；run_id 每轮 Agent 执行生成一�
 - `on_tool_start` → `tool_start`
 - `on_tool_end` → `tool_end`（原始输出经 `summarize_tool_output` 转为用户友好摘要）
 - `generate_image` 工具内部完成后额外推送 `generation_start` / `generation_done`
+- `enhance_prompt_node` / `refine_prompt_node` 得到结构化 prompt 后通过 `QueueEmitter` 推送 `prompt_update`
 
 当前实现注意：`analyze_reference_image`、`lookup_style_keywords`、`search_similar_cases` 是 LangChain `@tool`，可产生 `tool_start/end`；`enhance_prompt`、`generate_image`、`evaluate_generated_image`、`refine_prompt` 当前由 Graph 节点直接调用，不保证出现 LangGraph tool event。前端必须以 `generation_start/done` 和文本事件为主，不应把所有工具状态都当作必达事件。
 
@@ -380,6 +383,7 @@ session_id 在整个对话窗口内不变；run_id 每轮 Agent 执行生成一�
 - `tool_start` / `tool_end`：消息气泡下方显示小状态条（"正在分析参考图..."），完成后自动收起
 - `generation_start`：显示生成中占位卡片（loading 动画）
 - `generation_done`：替换占位卡片为真实图片；中间对话区显示缩略图，右侧"生成图片"标签页加入可查看、批注、下载的图片项
+- `prompt_update`：更新右侧工作区 `promptDraft` / `negativePromptDraft`，并切换到"提示词与参考图"标签页
 - `error`：展示错误提示
 - `done`：结束当前消息，根据 `finish_reason` 决定 UI 状态
 
@@ -414,11 +418,10 @@ session_id 在整个对话窗口内不变；run_id 每轮 Agent 执行生成一�
 | `chatStore` | messages、当前 sessionId、stream 状态、工具状态、生成中占位 | 会话 API + SSE |
 | `workspaceStore` | sidebar 折叠、右侧标签、prompt 草稿、参考图草稿、参数滑块、选中风格、批注草稿 | 用户操作 + SSE `generation_done` / 后续 prompt 事件 |
 
-当前 SSE 协议没有专门的 `prompt_update` 事件。E-1/E-2 可以先从对话文本和 `generation_done` 更新 UI；E-3 若需要右侧 prompt 实时稳定刷新，应补充后端事件：
+当前 SSE 协议已支持 `prompt_update` 事件，用于右侧 prompt 实时稳定刷新；后续如需同步关键 `DesignState` 或参数，可继续补充 `state_patch`：
 
 | 事件类型 | 触发时机 | data 结构 |
 |----------|----------|-----------|
-| `prompt_update` | `enhance_prompt` / `refine_prompt` 得到结构化 prompt 后 | `{"prompt": "...", "negative_prompt": "...", "source": "enhance_prompt | refine_prompt"}` |
 | `state_patch` | Agent 更新关键 `DesignState` 或参数时 | `{"design_state": {...}, "generation_params": {...}}` |
 
 ### 关键细节
@@ -1446,9 +1449,9 @@ backend/tests/
 
 **E-3 参数滑块、风格模板与 prompt 实时同步**
 
-- [ ] 后端 `enhance_prompt_node` / `refine_prompt_node` 执行完后通过 `QueueEmitter` 推送 `prompt_update` SSE 事件（含 `prompt`、`negative_prompt`、`source`）
-- [ ] 前端 `useSSE` 新增 `onPromptUpdate` 回调，消费 `prompt_update` 事件，更新 `workspaceStore.promptDraft` / `negativePromptDraft`
-- [ ] `SSEEventPayloadMap` / `SSEEventType` 补充 `prompt_update` 类型
+- [x] 后端 `enhance_prompt_node` / `refine_prompt_node` 执行完后通过 `QueueEmitter` 推送 `prompt_update` SSE 事件（含 `prompt`、`negative_prompt`、`source`）
+- [x] 前端 `useSSE` 新增 `onPromptUpdate` 回调，消费 `prompt_update` 事件，更新 `workspaceStore.promptDraft` / `negativePromptDraft`
+- [x] `SSEEventPayloadMap` / `SSEEventType` 补充 `prompt_update` 类型
 - [ ] 编写 `GenerationControls.tsx`：`temperature`、`lightingIntensity`、`stylization`、`materialStrength`、`compositionStrength` 滑块/输入框
 - [ ] 从 `prompt_templates.py` 对齐前端风格模板数据源；优先后端新增接口输出模板，避免前后端手写两份长期漂移
 - [ ] 用户选择风格模板后写入 `workspaceStore.selectedStyle`，并随下一条消息提交给 Agent
@@ -1485,6 +1488,10 @@ backend/tests/
 6. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-08：修复聊天工作台页面级滚动问题：`ChatWorkspace` 使用 `fixed inset-0` + `overflow-hidden` 固定为全视口工作台；中栏 `ChatPanel` 使用 `grid-rows-[72px_minmax(0,1fr)_auto]`，只有 `MessageList` 所在中间行独立滚动，输入栏始终固定在中栏底部；右栏 `WorkspacePanel` 固定高度并仅内容区域独立滚动，header 固定。
+- 2026-05-08：修复偶发 `asyncpg InterfaceError: connection is closed`：后端 SQLAlchemy async engine 开启 `pool_pre_ping=True` 与 `pool_recycle=1800`，避免连接池复用被 PostgreSQL/Docker/网络关闭的旧连接。该问题发生在普通请求拿 session 查询时，根因属于连接池健康检查缺失，不在业务 service 层做散乱重试。
+- 2026-05-08：修复 `agent_node` 自动决策生成图片的问题：新增后端显式生成意图硬规则，只检查最新用户消息，支持中文“生成 / 生成图片 / 开始生成 / 开始出图 / 出图 / 渲染”等和英文 `generate / render / create image` 等命令；“不要生成 / 先不生成 / 别出图 / do not generate”等否定表达优先拦截。`agent_node` 继续让 LLM 更新 `DesignState`，但最终 `ready_to_generate` 只由该硬规则决定，LLM 返回 `phase=generating` 且用户未明确生成时会被覆盖为 `collecting`。同步更新 `agent_system` 提示词，去掉“信息完整度够即可生成”的指令。
+- 2026-05-08：E-3 prompt 实时同步第一段完成：后端 `enhance_prompt_node` / `refine_prompt_node` 在拿到结构化 `EnhancedPrompt` 后通过当前 SSE `QueueEmitter` 推送 `prompt_update`，前端 `SSEEventPayloadMap` / `useSSE` 增加 `prompt_update` 类型和 `onPromptUpdate` 回调，`ChatWorkspace` 收到事件后更新 `workspaceStore.promptDraft` / `negativePromptDraft` 并切回右侧 prompt 标签。参数滑块、风格模板和端到端人工验证仍保留在 E-3 后续项。
 - 2026-05-08：Langfuse 部署升级策略调整为“SDK 4.x 对齐 Langfuse 3.x 主线”，而不是追求不存在的“server 4.x”。当前后端依赖是 `langfuse==4.5.1`，原 compose 使用 `langfuse/langfuse:2` 会在 span export 时返回 `404 Not Found`。现已将 `docker-compose.yml` 升级为 Langfuse 3.x 所需的 `langfuse` + `langfuse-worker` + `langfuse-clickhouse` + `langfuse-minio` + `langfuse-redis` 组合，并保留业务侧原有 `redis` / `minio` 供 Celery / Milvus 使用，避免基础设施相互污染。后续本地验证需执行 `docker compose up -d langfuse-redis langfuse-clickhouse langfuse-minio langfuse-minio-init langfuse-worker langfuse` 并重新生成 Langfuse project keys 填回 Dashboard。
 - 2026-05-08：修复 Langfuse 3.x 启动失败：web / worker 日志报 `ENCRYPTION_KEY must be 256 bits, 64 string characters in hex format`，原因是 compose 中临时全 0 值未通过当前版本校验。已替换为 64 位 hex 开发值；生产环境需使用 `openssl rand -hex 32` 生成真实密钥，并保证 `langfuse` 与 `langfuse-worker` 使用同一个值。
 - 2026-05-08：C-7 关键观测先落地，不等待完整 UI 联调：新增 `backend/core/observability.py` 统一封装 Langfuse 4.x 顶层 API（`observe`、`start_as_current_observation`、`update_current_span`、`update_current_generation`），FastAPI lifespan 从 Dashboard 配置初始化 Langfuse，配置为空时显式禁用 tracing；Chat SSE 每轮包 `agent:turn` 父观测，`agent` / `rag_gate` / `enhance_prompt` / `generate_image` / `evaluate_image` / `refine_prompt` 节点记录输入输出与路由状态，参考图分析、风格查询、RAG stub、prompt 构建/修正、图像生成、图像评估工具记录关键 LLM 原始输出、解析结果、fallback、评分和任务信息。C-7 仍保留“Langfuse UI 完整 Trace 树验证”未勾选，需填入真实 Langfuse key 后跑一轮对话确认。

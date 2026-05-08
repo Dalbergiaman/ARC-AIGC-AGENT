@@ -103,6 +103,7 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
     }),
     {
       name: "workspace-store",
+      skipHydration: true,
       // Only persist reference images — layout and prompt drafts are transient
       partialize: (state) => ({
         referenceImagesBySession: state.referenceImagesBySession,

@@ -34,6 +34,19 @@ _llm = LLMClient()
 # Regex to find image URLs in message content
 _IMAGE_URL_RE = re.compile(r'https?://\S+\.(?:jpg|jpeg|png|webp)', re.IGNORECASE)
 
+_GENERATION_NEGATIVE_RE = re.compile(
+    r"(不要|别|先不|暂不|不用|无需|先别)\s*(生成|出图|渲染)|"
+    r"(do\s+not|don't|dont|no)\s+(generate|render|create\s+(an?\s+)?image|generation)",
+    re.IGNORECASE,
+)
+_GENERATION_INTENT_RE = re.compile(
+    r"(生成图片|生成图像|开始生成|开始出图|开始渲染|帮我出一张|帮我生成一张|出图|渲染|生成)|"
+    r"\b(generate|render)\b|"
+    r"\b(create|make)\s+(an?\s+)?(image|rendering|render)\b|"
+    r"\bstart\s+(generation|rendering)\b",
+    re.IGNORECASE,
+)
+
 
 def _extract_image_urls(messages: list) -> list[str]:
     """Extract image URLs from the latest human message."""
@@ -42,6 +55,38 @@ def _extract_image_urls(messages: list) -> list[str]:
             content = msg.content if isinstance(msg.content, str) else str(msg.content)
             return _IMAGE_URL_RE.findall(content)
     return []
+
+
+def _latest_human_text(messages: list) -> str:
+    """Return the latest user-authored text for deterministic intent gates."""
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            return content.split("\n[用户草稿 prompt:", 1)[0]
+    return ""
+
+
+def has_explicit_generation_intent(messages: list) -> bool:
+    """Return True only when the latest user message explicitly asks to generate.
+
+    This is the hard backend gate for image generation. The LLM may still infer
+    design state, but it cannot trigger the generation sub-flow on its own.
+    """
+    text = _latest_human_text(messages).strip()
+    if not text:
+        return False
+    if _GENERATION_NEGATIVE_RE.search(text):
+        return False
+    return _GENERATION_INTENT_RE.search(text) is not None
+
+
+def resolve_generation_gate(llm_phase: str, explicit_generation_intent: bool) -> tuple[bool, str]:
+    """Resolve final generation control state from deterministic user intent."""
+    if explicit_generation_intent:
+        return True, "generating"
+    if llm_phase == "generating":
+        return False, "collecting"
+    return False, llm_phase
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +106,7 @@ async def agent_node(state: AgentState) -> dict:
     reference_images = list(state.get("reference_images") or [])
     similar_cases = list(state.get("similar_cases") or [])
     messages = list(state.get("messages") or [])
+    explicit_generation_intent = has_explicit_generation_intent(messages)
     style_keywords = None
     updates: dict = {}
     update_current_span(
@@ -74,6 +120,7 @@ async def agent_node(state: AgentState) -> dict:
             "phase": state.get("phase"),
             "retry_count": state.get("retry_count", 0),
             "ready_to_generate": state.get("ready_to_generate", False),
+            "explicit_generation_intent": explicit_generation_intent,
         },
     )
 
@@ -187,8 +234,11 @@ async def agent_node(state: AgentState) -> dict:
 
     design_state = update_completeness(design_state)
 
-    ready = bool(data.get("ready_to_generate", False))
-    phase = data.get("phase", "collecting")
+    llm_ready = bool(data.get("ready_to_generate", False))
+    ready, phase = resolve_generation_gate(
+        llm_phase=data.get("phase", "collecting"),
+        explicit_generation_intent=explicit_generation_intent,
+    )
     result: dict = {
         **updates,
         "design_state": design_state,
@@ -205,6 +255,8 @@ async def agent_node(state: AgentState) -> dict:
             "parse_ok": True,
             "reply": message_preview(data.get("reply", "")),
             "design_state": design_state,
+            "llm_ready_to_generate": llm_ready,
+            "explicit_generation_intent": explicit_generation_intent,
             "ready_to_generate": ready,
             "phase": phase,
             "reference_image_count": len(reference_images),
@@ -270,6 +322,13 @@ async def enhance_prompt_node(state: AgentState) -> dict:
         reference_analysis=reference_images,
         similar_cases=similar_cases,
     )
+    emitter = get_current_emitter()
+    if emitter is not None:
+        await emitter.emit("prompt_update", {
+            "prompt": enhanced.prompt,
+            "negative_prompt": enhanced.negative_prompt,
+            "source": "enhance_prompt",
+        })
 
     update_current_span(
         input={
@@ -410,6 +469,13 @@ async def refine_prompt_node(state: AgentState) -> dict:
         original_prompt=enhanced_prompt,
         evaluation=evaluation,
     )
+    emitter = get_current_emitter()
+    if emitter is not None:
+        await emitter.emit("prompt_update", {
+            "prompt": refined.prompt,
+            "negative_prompt": refined.negative_prompt,
+            "source": "refine_prompt",
+        })
 
     update_current_span(output=refined.model_dump())
     return {

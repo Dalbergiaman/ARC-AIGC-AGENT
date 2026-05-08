@@ -92,6 +92,11 @@ export type SSEEventPayloadMap = {
   tool_end: { tool: string; summary: string };
   generation_start: { task_id: string; run_id?: string };
   generation_done: { task_id: string; image_url: string; run_id?: string };
+  prompt_update: {
+    prompt: string;
+    negative_prompt: string;
+    source: "enhance_prompt" | "refine_prompt";
+  };
   error: { code: string; message: string };
   done: { finish_reason: "stop" | "max_retries" | "interrupted" };
 };

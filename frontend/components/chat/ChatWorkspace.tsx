@@ -74,10 +74,16 @@ export function ChatWorkspace({ sessionId }: Props) {
     getReferenceImages,
     promptDraft,
     negativePromptDraft,
+    setPromptDraft,
+    setNegativePromptDraft,
     updateReferenceImage,
   } = useWorkspaceStore();
 
   const referenceImages = getReferenceImages(sessionId);
+
+  useEffect(() => {
+    void useWorkspaceStore.persist.rehydrate();
+  }, []);
 
   const refreshSessions = useCallback(async () => {
     const sessionItems = await listSessions();
@@ -173,6 +179,11 @@ export function ChatWorkspace({ sessionId }: Props) {
     onGenerationDone: (taskId, imageUrl, runId) => {
       upsertGenerationPreview({ taskId, imageUrl, runId });
       setActiveTab("images");
+    },
+    onPromptUpdate: (prompt, negativePrompt) => {
+      setPromptDraft(prompt);
+      setNegativePromptDraft(negativePrompt);
+      setActiveTab("prompt");
     },
     onError: (_code, message) => {
       setStreamState("error");
@@ -270,7 +281,7 @@ export function ChatWorkspace({ sessionId }: Props) {
   return (
     <div
       ref={containerRef}
-      className={`flex min-h-screen items-stretch flex-1 overflow-hidden ${isResizingWorkspace ? "select-none" : ""}`}
+      className={`fixed inset-0 flex min-h-0 items-stretch overflow-hidden bg-white ${isResizingWorkspace ? "select-none" : ""}`}
     >
       <AppSidebar
         collapsed={sidebarCollapsed}

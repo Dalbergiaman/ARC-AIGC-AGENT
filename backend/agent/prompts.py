@@ -77,8 +77,9 @@ def agent_system(
 - 参考图分析得出 → 0.7
 
 **第三步：决定下一步行动**
+- 若用户本轮没有明确要求生成 / 出图 / 渲染 → 不得生成，输出 `ready_to_generate: false`，继续追问或确认下一步
 - 若 `missing_fields` 非空且用户未明确要求生成 → 追问缺失字段（每次只问最重要的 1～2 个）
-- 若 `completeness >= 0.8` 或用户明确要求生成 → 输出 `ready_to_generate: true`
+- 只有用户本轮明确要求生成 / 出图 / 渲染 / 重新生成时，才可以输出 `ready_to_generate: true`
 - 若用户要求中断或取消 → 输出 `phase: interrupted`
 
 ## 输出格式（JSON）
@@ -108,7 +109,7 @@ def agent_system(
 规则：
 - `design_state_updates` 只填本轮有变化的字段，未变化的字段留空字符串
 - `reply` 是展示给用户的回复，不要暴露 JSON 结构或技术细节, 不管用户提出什么问题，你都必须为reply提供一个有用的回答，不能直接说“请提供更多信息”或者“我不清楚”甚至直接是空字段，而是要引导用户提供缺失的信息，例如“这个设计是面向住宅还是商业用途呢？”或者“您更倾向于现代风格还是传统风格呢？”等引导性问题。
-- 若 `ready_to_generate` 为 true，`phase` 改为 `generating`
+- 若 `ready_to_generate` 为 true，`phase` 改为 `generating`；不要因为信息完整度高而自行改为生成
 - 若用户中断，`phase` 改为 `interrupted`，`ready_to_generate` 为 false"""
 
 

@@ -11,6 +11,11 @@ type Handlers = {
   onToolEnd?: (tool: string, summary: string) => void;
   onGenerationStart?: (taskId: string, runId?: string) => void;
   onGenerationDone?: (taskId: string, imageUrl: string, runId?: string) => void;
+  onPromptUpdate?: (
+    prompt: string,
+    negativePrompt: string,
+    source: "enhance_prompt" | "refine_prompt",
+  ) => void;
   onError?: (code: string, message: string) => void;
   onDone?: (finishReason: "stop" | "max_retries" | "interrupted") => void;
 };
@@ -30,6 +35,7 @@ export function useSSE({
   onToolEnd,
   onGenerationStart,
   onGenerationDone,
+  onPromptUpdate,
   onError,
   onDone,
 }: Options) {
@@ -39,6 +45,7 @@ export function useSSE({
     onToolEnd,
     onGenerationStart,
     onGenerationDone,
+    onPromptUpdate,
     onError,
     onDone,
   });
@@ -50,10 +57,20 @@ export function useSSE({
       onToolEnd,
       onGenerationStart,
       onGenerationDone,
+      onPromptUpdate,
       onError,
       onDone,
     };
-  }, [onDone, onError, onGenerationDone, onGenerationStart, onTextDelta, onToolEnd, onToolStart]);
+  }, [
+    onDone,
+    onError,
+    onGenerationDone,
+    onGenerationStart,
+    onPromptUpdate,
+    onTextDelta,
+    onToolEnd,
+    onToolStart,
+  ]);
 
   useEffect(() => {
     if (!enabled || !sessionId || !streamId) {
@@ -99,6 +116,14 @@ export function useSSE({
           typeof data.run_id === "string" ? data.run_id : undefined,
         );
       }
+      if (
+        eventType === "prompt_update" &&
+        typeof data.prompt === "string" &&
+        typeof data.negative_prompt === "string" &&
+        (data.source === "enhance_prompt" || data.source === "refine_prompt")
+      ) {
+        handlers.onPromptUpdate?.(data.prompt, data.negative_prompt, data.source);
+      }
       if (eventType === "error" && typeof data.code === "string" && typeof data.message === "string") {
         handlers.onError?.(data.code, data.message);
       }
@@ -115,6 +140,8 @@ export function useSSE({
       handleEvent("generation_start", event);
     const generationDoneListener = (event: MessageEvent<string>) =>
       handleEvent("generation_done", event);
+    const promptUpdateListener = (event: MessageEvent<string>) =>
+      handleEvent("prompt_update", event);
     const errorListener = (event: MessageEvent<string>) => handleEvent("error", event);
     const doneListener = (event: MessageEvent<string>) => handleEvent("done", event);
 
@@ -123,6 +150,7 @@ export function useSSE({
     eventSource.addEventListener("tool_end", toolEndListener);
     eventSource.addEventListener("generation_start", generationStartListener);
     eventSource.addEventListener("generation_done", generationDoneListener);
+    eventSource.addEventListener("prompt_update", promptUpdateListener);
     eventSource.addEventListener("error", errorListener);
     eventSource.addEventListener("done", doneListener);
     eventSource.onerror = () => {
