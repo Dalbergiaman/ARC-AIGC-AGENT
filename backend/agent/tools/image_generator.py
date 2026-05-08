@@ -14,6 +14,7 @@ from celery.result import AsyncResult
 from agent.state import AgentState, GenerationResult
 from agent.tools.prompt_builder import EnhancedPrompt
 from celery_app import celery_app
+from core.observability import observe, update_current_span
 
 
 class SSEEmitter(Protocol):
@@ -31,6 +32,7 @@ _POLL_INTERVAL = 2      # seconds between Redis result checks
 _TIMEOUT_SECONDS = 120  # max wait before treating as timeout
 
 
+@observe(name="tool:generate_image", as_type="tool")
 async def generate_image(
     state: AgentState,
     enhanced_prompt: EnhancedPrompt,
@@ -59,10 +61,20 @@ async def generate_image(
         "negative_prompt": enhanced_prompt.negative_prompt,
         "ref_image_url": ref_url,
     }
+    update_current_span(
+        input={
+            "prompt": enhanced_prompt.prompt,
+            "negative_prompt": enhanced_prompt.negative_prompt,
+            "ref_image_url": ref_url,
+            "session_id": session_id,
+            "run_id": run_id,
+        }
+    )
 
     # Submit task
     from tasks.image_task import generate_image_task
     task = generate_image_task.delay(request_dict)
+    update_current_span(metadata={"task_id": task.id})
 
     await emitter.emit("generation_start", {
         "task_id": task.id,
@@ -88,6 +100,11 @@ async def generate_image(
                 await redis.aclose()
             if cancelled:
                 task.revoke(terminate=True)
+                update_current_span(
+                    level="WARNING",
+                    status_message=f"interrupted by user (run_id={run_id})",
+                    metadata={"task_id": task.id},
+                )
                 raise asyncio.CancelledError(f"interrupted by user (run_id={run_id})")
 
         result = AsyncResult(task.id, app=celery_app)
@@ -106,10 +123,28 @@ async def generate_image(
                     "image_url": data["image_url"],
                     "run_id": run_id,
                 })
+                update_current_span(
+                    output={
+                        "task_id": task.id,
+                        "image_url": data["image_url"],
+                        "provider": data["provider"],
+                        "generation_time": data["generation_time"],
+                    }
+                )
                 return gen_result
             else:
+                update_current_span(
+                    level="ERROR",
+                    status_message=f"generation task failed: {result.result}",
+                    metadata={"task_id": task.id},
+                )
                 raise RuntimeError(f"generation task failed: {result.result}")
 
     # Timeout
     task.revoke(terminate=True)
+    update_current_span(
+        level="WARNING",
+        status_message=f"generation timed out after {_TIMEOUT_SECONDS}s",
+        metadata={"task_id": task.id},
+    )
     raise TimeoutError(f"generation timed out after {_TIMEOUT_SECONDS}s")

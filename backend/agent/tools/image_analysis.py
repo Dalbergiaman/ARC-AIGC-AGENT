@@ -9,6 +9,7 @@ from agent.prompts import analyze_image_system
 from agent.state import ReferenceImageAnalysis
 from config import settings
 from core.llm.client import LLMClient
+from core.observability import message_preview, observe, update_current_generation
 
 _llm = LLMClient()
 
@@ -44,6 +45,7 @@ def _to_data_url(image_url: str) -> str:
 
 
 @tool
+@observe(name="tool:analyze_reference_image", as_type="generation")
 async def analyze_reference_image(image_url: str) -> dict:
     """Analyze a reference image using VLM and extract architectural design features.
 
@@ -59,6 +61,10 @@ async def analyze_reference_image(image_url: str) -> dict:
     ]
 
     raw = await _llm.ainvoke(messages, images=[resolved_url])
+    update_current_generation(
+        input={"image_url": image_url, "resolved_as_data_url": resolved_url.startswith("data:")},
+        output=message_preview(raw),
+    )
 
     # Strip markdown code fences if present
     text = raw.strip()
@@ -71,6 +77,12 @@ async def analyze_reference_image(image_url: str) -> dict:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
+        update_current_generation(
+            output={"image_url": image_url, "description": "parse failed"},
+            metadata={"parse_ok": False},
+            level="WARNING",
+            status_message="reference image analysis JSON parse failed",
+        )
         return {
             "image_url": image_url,
             "building_type": "",
@@ -92,6 +104,7 @@ async def analyze_reference_image(image_url: str) -> dict:
         "color_palette": data.get("color_palette", ""),
         "description": data.get("description", ""),
     }
+    update_current_generation(output=result, metadata={"parse_ok": True})
     return result
 
 

@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError, field_validator
 from agent.prompts import evaluate_image_system
 from agent.state import DesignState, EvaluationResult, ReferenceImageAnalysis
 from core.llm.client import LLMClient
+from core.observability import message_preview, observe, update_current_generation
 
 _llm = LLMClient()
 
@@ -87,6 +88,7 @@ def _parse_scores(raw_text: str) -> _RawScores:
 # Main function
 # ---------------------------------------------------------------------------
 
+@observe(name="tool:evaluate_generated_image", as_type="generation")
 async def evaluate_generated_image(
     image_url: str,
     design_state: DesignState,
@@ -114,6 +116,15 @@ async def evaluate_generated_image(
     ]
 
     raw = await _llm.ainvoke(messages, images=images)
+    update_current_generation(
+        input={
+            "image_url": image_url,
+            "design_state": design_state,
+            "reference_image_count": len(reference_images),
+        },
+        output=message_preview(raw),
+        metadata={"attempt": 1, "has_reference": has_reference},
+    )
 
     try:
         scores = _parse_scores(raw)
@@ -123,6 +134,7 @@ async def evaluate_generated_image(
             content="请严格按照 JSON 格式输出各维度分数，不要包含其他内容。"
         ))
         raw2 = await _llm.ainvoke(messages, images=images)
+        update_current_generation(output=message_preview(raw2), metadata={"attempt": 2})
         try:
             scores = _parse_scores(raw2)
         except (json.JSONDecodeError, ValidationError, KeyError):
@@ -135,6 +147,11 @@ async def evaluate_generated_image(
                 quality_score=0.5,
                 reference_score=0.5 if has_reference else None,
                 feedback="评估解析失败，建议人工检查生成结果",
+            )
+            update_current_generation(
+                metadata={"parse_ok": False, "fallback": True},
+                level="WARNING",
+                status_message="image evaluation JSON parse failed",
             )
 
     weighted_score = _compute_weighted_score(scores, has_reference)
@@ -149,6 +166,7 @@ async def evaluate_generated_image(
         "reference_score": scores.reference_score,
         "feedback": scores.feedback,
     }
+    update_current_generation(output=result, metadata={"parse_ok": True, "score": weighted_score})
     return result
 
 

@@ -14,6 +14,7 @@ from agent.prompts import enhance_prompt_system, refine_prompt_system
 from agent.state import DesignState, EvaluationResult, ReferenceImageAnalysis
 from agent.tools.prompt_templates import StyleKeywords, get_style
 from core.llm.client import LLMClient
+from core.observability import message_preview, observe, update_current_generation
 
 _llm = LLMClient()
 
@@ -35,6 +36,7 @@ def _parse_prompt_response(raw: str) -> EnhancedPrompt:
     return EnhancedPrompt(**data)
 
 
+@observe(name="tool:enhance_prompt", as_type="generation")
 async def enhance_prompt(
     design_state: DesignState,
     reference_analysis: list[ReferenceImageAnalysis] | None = None,
@@ -62,15 +64,30 @@ async def enhance_prompt(
     ]
 
     raw = await _llm.ainvoke(messages)
+    update_current_generation(
+        input={
+            "design_state": design_state,
+            "reference_image_count": len(reference_analysis or []),
+            "similar_case_count": len(similar_cases or []),
+            "style_keywords_found": style_keywords is not None,
+        },
+        output=message_preview(raw),
+        metadata={"attempt": 1},
+    )
 
     try:
-        return _parse_prompt_response(raw)
+        parsed = _parse_prompt_response(raw)
+        update_current_generation(output=parsed.model_dump(), metadata={"parse_ok": True})
+        return parsed
     except (json.JSONDecodeError, ValidationError, KeyError):
         # Retry once with an explicit reminder
         messages.append(HumanMessage(content="请严格按照 JSON 格式输出，只包含 prompt 和 negative_prompt 两个字段。"))
         raw2 = await _llm.ainvoke(messages)
+        update_current_generation(output=message_preview(raw2), metadata={"attempt": 2})
         try:
-            return _parse_prompt_response(raw2)
+            parsed = _parse_prompt_response(raw2)
+            update_current_generation(output=parsed.model_dump(), metadata={"parse_ok": True, "retried": True})
+            return parsed
         except (json.JSONDecodeError, ValidationError, KeyError):
             # Fallback: construct a basic prompt from design_state fields
             fallback_prompt = ", ".join(filter(None, [
@@ -81,12 +98,20 @@ async def enhance_prompt(
                 design_state.get("viewpoint", ""),
                 "architectural rendering, high quality, photorealistic",
             ]))
-            return EnhancedPrompt(
+            fallback = EnhancedPrompt(
                 prompt=fallback_prompt,
                 negative_prompt="blurry, distorted, watermark, low quality, deformed",
             )
+            update_current_generation(
+                output=fallback.model_dump(),
+                metadata={"parse_ok": False, "fallback": True},
+                level="WARNING",
+                status_message="enhance_prompt JSON parse failed",
+            )
+            return fallback
 
 
+@observe(name="tool:refine_prompt", as_type="generation")
 async def refine_prompt(
     original_prompt: EnhancedPrompt,
     evaluation: EvaluationResult,
@@ -104,9 +129,25 @@ async def refine_prompt(
     ]
 
     raw = await _llm.ainvoke(messages)
+    update_current_generation(
+        input={
+            "original_prompt": original_prompt.model_dump(),
+            "evaluation": evaluation,
+        },
+        output=message_preview(raw),
+        metadata={"attempt": 1},
+    )
 
     try:
-        return _parse_prompt_response(raw)
+        parsed = _parse_prompt_response(raw)
+        update_current_generation(output=parsed.model_dump(), metadata={"parse_ok": True})
+        return parsed
     except (json.JSONDecodeError, ValidationError, KeyError):
         # Fallback: return original prompt unchanged
+        update_current_generation(
+            output=original_prompt.model_dump(),
+            metadata={"parse_ok": False, "fallback": True},
+            level="WARNING",
+            status_message="refine_prompt JSON parse failed",
+        )
         return original_prompt

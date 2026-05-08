@@ -23,6 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from core.llm.streaming import _parse_sse_chunk, stream_agent_events
+from core.observability import (
+    message_preview,
+    set_current_trace_io,
+    start_observation,
+    update_current_span,
+)
 from models.database import get_session
 from services.message_service import add_message, get_messages
 from services.session_service import get_session as get_db_session
@@ -268,32 +274,59 @@ async def _generate_sse(
             "recursion_limit": 25,
         }
 
-        async for chunk in stream_agent_events(graph, config, input_state):
-            event_type, data = _parse_sse_chunk(chunk)
-            if should_persist_assistant and event_type == "text_delta":
-                content = data.get("content")
-                if isinstance(content, str):
-                    assistant_text_parts.append(content)
+        latest_user = next(
+            (message_preview(m.content) for m in reversed(lc_messages) if isinstance(m, HumanMessage)),
+            "",
+        )
+        turn_metadata = {
+            "session_id": str(session_id),
+            "run_id": stream_id,
+            "history_count": len(lc_messages),
+            "reference_image_count": len(pending_ref_images),
+            "has_workspace_prompt": bool(workspace_raw),
+        }
 
-            # Buffer for reconnection
-            await _buffer_event(r, buffer_key, chunk)
-            yield chunk
+        with start_observation(
+            name="agent:turn",
+            as_type="agent",
+            input=latest_user,
+            metadata=turn_metadata,
+        ):
+            set_current_trace_io(input=latest_user)
+            update_current_span(metadata=turn_metadata)
 
-            if should_persist_assistant and event_type == "done":
-                assistant_text = "".join(assistant_text_parts).strip()
-                if assistant_text:
-                    reply_text = _extract_reply(assistant_text) or assistant_text
-                    await add_message(db, session_id, "assistant", reply_text)
-                    try:
-                        await maybe_generate_session_title(db, session_id)
-                    except Exception:
-                        pass
-                await _clear_active_run(r, session_id, stream_id)
-                should_persist_assistant = False
+            async for chunk in stream_agent_events(graph, config, input_state):
+                event_type, data = _parse_sse_chunk(chunk)
+                if should_persist_assistant and event_type == "text_delta":
+                    content = data.get("content")
+                    if isinstance(content, str):
+                        assistant_text_parts.append(content)
 
-            # Honour client disconnect
-            if await request.is_disconnected():
-                break
+                # Buffer for reconnection
+                await _buffer_event(r, buffer_key, chunk)
+                yield chunk
+
+                if should_persist_assistant and event_type == "done":
+                    assistant_text = "".join(assistant_text_parts).strip()
+                    if assistant_text:
+                        reply_text = _extract_reply(assistant_text) or assistant_text
+                        set_current_trace_io(output=message_preview(reply_text))
+                        update_current_span(
+                            output=message_preview(reply_text),
+                            metadata={"finish_reason": data.get("finish_reason", "stop")},
+                        )
+                        await add_message(db, session_id, "assistant", reply_text)
+                        try:
+                            await maybe_generate_session_title(db, session_id)
+                        except Exception:
+                            pass
+                    await _clear_active_run(r, session_id, stream_id)
+                    should_persist_assistant = False
+
+                # Honour client disconnect
+                if await request.is_disconnected():
+                    update_current_span(level="WARNING", status_message="client disconnected")
+                    break
 
     finally:
         await r.aclose()

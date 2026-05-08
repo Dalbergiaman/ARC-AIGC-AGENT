@@ -121,6 +121,8 @@ export function AppSidebar({
                         <div className="truncate text-xs text-muted-foreground">
                           {item.createdAt
                             ? new Date(item.createdAt).toLocaleString("zh-CN", {
+                                timeZone: "Asia/Shanghai",
+                                hour12: false,
                                 month: "2-digit",
                                 day: "2-digit",
                                 hour: "2-digit",

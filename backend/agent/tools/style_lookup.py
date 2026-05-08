@@ -1,9 +1,11 @@
 from langchain_core.tools import tool
 
 from agent.tools.prompt_templates import StyleKeywords, get_style, list_styles
+from core.observability import observe, update_current_span
 
 
 @tool
+@observe(name="tool:lookup_style_keywords", as_type="tool")
 def lookup_style_keywords(style: str) -> dict:
     """Query the local style keyword library for a given architectural style.
 
@@ -12,7 +14,7 @@ def lookup_style_keywords(style: str) -> dict:
     """
     result = get_style(style)
     if result is None:
-        return {
+        output = {
             "found": False,
             "style": style,
             "positive": [],
@@ -20,7 +22,11 @@ def lookup_style_keywords(style: str) -> dict:
             "mood": "",
             "available_styles": list_styles(),
         }
-    return {
+        update_current_span(input={"style": style}, output=output)
+        return output
+    output = {
         "found": True,
         **result,
     }
+    update_current_span(input={"style": style}, output=output)
+    return output

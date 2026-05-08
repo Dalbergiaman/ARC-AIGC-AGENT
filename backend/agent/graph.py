@@ -27,6 +27,7 @@ from agent.tools.prompt_builder import EnhancedPrompt, enhance_prompt, refine_pr
 from agent.tools.style_lookup import lookup_style_keywords
 from agent.tools.search_library import search_similar_cases
 from core.llm.client import LLMClient
+from core.observability import message_preview, observe, update_current_span
 
 _llm = LLMClient()
 
@@ -47,6 +48,7 @@ def _extract_image_urls(messages: list) -> list[str]:
 # Nodes
 # ---------------------------------------------------------------------------
 
+@observe(name="node:agent", as_type="agent")
 async def agent_node(state: AgentState) -> dict:
     """Main decision node: understands intent, updates DesignState, decides next step.
 
@@ -61,6 +63,19 @@ async def agent_node(state: AgentState) -> dict:
     messages = list(state.get("messages") or [])
     style_keywords = None
     updates: dict = {}
+    update_current_span(
+        input={
+            "latest_message": message_preview(messages[-1].content) if messages else "",
+            "design_state": design_state,
+            "reference_image_count": len(reference_images),
+            "similar_case_count": len(similar_cases),
+        },
+        metadata={
+            "phase": state.get("phase"),
+            "retry_count": state.get("retry_count", 0),
+            "ready_to_generate": state.get("ready_to_generate", False),
+        },
+    )
 
     # --- Rule 1: analyze images that have a URL but no description yet ---
     # Pre-filled entries from input_state have image_url + intent/note but no VLM analysis.
@@ -143,6 +158,16 @@ async def agent_node(state: AgentState) -> dict:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
+        update_current_span(
+            output={
+                "parse_ok": False,
+                "raw": message_preview(raw),
+                "design_state": update_completeness(design_state),
+                "phase": "collecting",
+            },
+            level="WARNING",
+            status_message="agent JSON parse failed",
+        )
         return {
             **updates,
             "design_state": update_completeness(design_state),
@@ -175,9 +200,20 @@ async def agent_node(state: AgentState) -> dict:
     if ready:
         result.update(reset_generation_run(state))
 
+    update_current_span(
+        output={
+            "parse_ok": True,
+            "reply": message_preview(data.get("reply", "")),
+            "design_state": design_state,
+            "ready_to_generate": ready,
+            "phase": phase,
+            "reference_image_count": len(reference_images),
+        }
+    )
     return result
 
 
+@observe(name="node:rag_gate")
 async def rag_gate_node(state: AgentState) -> dict:
     """Rule-based gate: calls search_similar_cases when conditions are met.
 
@@ -198,6 +234,10 @@ async def rag_gate_node(state: AgentState) -> dict:
     )
 
     if not should_search:
+        update_current_span(
+            input={"design_state": design_state, "last_search_signature": last_sig},
+            output={"searched": False, "reason": "signature unchanged or missing core fields"},
+        )
         return {}
 
     query = " ".join(filter(None, [building_type, style,
@@ -208,12 +248,17 @@ async def rag_gate_node(state: AgentState) -> dict:
         "style": style,
     })
 
+    update_current_span(
+        input={"query": query, "building_type": building_type, "style": style},
+        output={"searched": True, "result_count": len(results)},
+    )
     return {
         "similar_cases": results,
         "last_search_signature": make_search_signature(design_state),
     }
 
 
+@observe(name="node:enhance_prompt")
 async def enhance_prompt_node(state: AgentState) -> dict:
     """Build the image generation prompt from DesignState + similar cases."""
     design_state = dict(state.get("design_state") or {})
@@ -226,12 +271,21 @@ async def enhance_prompt_node(state: AgentState) -> dict:
         similar_cases=similar_cases,
     )
 
+    update_current_span(
+        input={
+            "design_state": design_state,
+            "reference_image_count": len(reference_images),
+            "similar_case_count": len(similar_cases),
+        },
+        output=enhanced.model_dump(),
+    )
     return {
         "phase": "generating",
         "_enhanced_prompt": enhanced,  # passed to generate_image_node via state
     }
 
 
+@observe(name="node:generate_image")
 async def generate_image_node(state: AgentState) -> dict:
     """Submit Celery task and poll for result."""
     enhanced_prompt: EnhancedPrompt | None = state.get("_enhanced_prompt")
@@ -249,6 +303,14 @@ async def generate_image_node(state: AgentState) -> dict:
 
     retry_count = state.get("retry_count", 0)
     best = state.get("best_generation_result")
+    update_current_span(
+        input={
+            "prompt": enhanced_prompt.prompt,
+            "negative_prompt": enhanced_prompt.negative_prompt,
+            "retry_count": retry_count,
+            "has_best_result": best is not None,
+        }
+    )
 
     emitter = get_current_emitter() or NullEmitter()
     try:
@@ -258,16 +320,26 @@ async def generate_image_node(state: AgentState) -> dict:
             emitter=emitter,
         )
     except TimeoutError:
+        update_current_span(level="WARNING", status_message="generation timeout")
         return {
             "retry_count": retry_count + 1,
             "phase": "evaluating",
         }
     except asyncio.CancelledError:
+        update_current_span(level="WARNING", status_message="generation interrupted")
         return {"phase": "interrupted"}
 
     generation_results = list(state.get("generation_results") or [])
     generation_results.append(gen_result)
 
+    update_current_span(
+        output={
+            "image_url": gen_result.get("image_url"),
+            "provider": gen_result.get("provider"),
+            "generation_time": gen_result.get("generation_time"),
+            "result_count": len(generation_results),
+        }
+    )
     return {
         "generation_results": generation_results,
         "phase": "evaluating",
@@ -275,11 +347,13 @@ async def generate_image_node(state: AgentState) -> dict:
     }
 
 
+@observe(name="node:evaluate_image", as_type="evaluator")
 async def evaluate_image_node(state: AgentState) -> dict:
     """Evaluate the generated image with VLM multi-dimensional scoring."""
     gen_result = state.get("_current_gen_result")
     if gen_result is None:
         # No image to evaluate — skip with neutral score
+        update_current_span(output={"skipped": True, "reason": "no current generation result"})
         return {"phase": "done"}
 
     design_state = dict(state.get("design_state") or {})
@@ -297,6 +371,17 @@ async def evaluate_image_node(state: AgentState) -> dict:
     if best is None or scored["score"] > best.get("score", 0):
         best = scored
 
+    update_current_span(
+        input={
+            "image_url": gen_result.get("image_url"),
+            "design_state": design_state,
+            "reference_image_count": len(reference_images),
+        },
+        output={
+            "evaluation": evaluation,
+            "best_score": best.get("score") if best else None,
+        },
+    )
     return {
         "last_evaluation": evaluation,
         "best_generation_result": best,
@@ -304,19 +389,29 @@ async def evaluate_image_node(state: AgentState) -> dict:
     }
 
 
+@observe(name="node:refine_prompt")
 async def refine_prompt_node(state: AgentState) -> dict:
     """Refine the prompt based on evaluation feedback."""
     enhanced_prompt: EnhancedPrompt | None = state.get("_enhanced_prompt")
     evaluation: EvaluationResult | None = state.get("last_evaluation")
 
     if enhanced_prompt is None or evaluation is None:
+        update_current_span(output={"skipped": True, "reason": "missing prompt or evaluation"})
         return {}
 
+    update_current_span(
+        input={
+            "original_prompt": enhanced_prompt.model_dump(),
+            "evaluation": evaluation,
+            "retry_count": state.get("retry_count", 0),
+        }
+    )
     refined = await refine_prompt(
         original_prompt=enhanced_prompt,
         evaluation=evaluation,
     )
 
+    update_current_span(output=refined.model_dump())
     return {
         "_enhanced_prompt": refined,
         "retry_count": state.get("retry_count", 0) + 1,

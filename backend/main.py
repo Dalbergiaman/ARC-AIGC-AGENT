@@ -12,6 +12,7 @@ from api.routes.dashboard import router as dashboard_router
 from api.routes.session import router as session_router
 from api.routes.upload import router as upload_router
 from config import settings
+from core.observability import configure_langfuse_from_dashboard, flush_langfuse
 from models.database import engine
 from models.schema_guard import ensure_legacy_schema_compatibility
 from models.schemas import Base
@@ -19,6 +20,8 @@ from models.schemas import Base
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    app.state.langfuse_enabled = configure_langfuse_from_dashboard()
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(ensure_legacy_schema_compatibility)
@@ -28,6 +31,7 @@ async def lifespan(app: FastAPI):
         app.state.graph = compile_graph(saver)
         yield
 
+    flush_langfuse()
     await engine.dispose()
 
 

@@ -206,9 +206,8 @@ class ReferenceImageAnalysis(TypedDict, total=False):
     viewpoint: str
     color_palette: str
     description: str
-    # E-2 目标扩展字段，当前 backend/agent/state.py 尚未落地：
-    # reference_intent: str  # composition / color / style / material / lighting / surroundings / other
-    # intent_note: str       # 用户对参考意图的补充说明
+    reference_intent: str  # composition / color / style / material / lighting / surroundings / other
+    intent_note: str       # 用户对参考意图的补充说明
 
 class GenerationResult(TypedDict, total=False):  # Agent 层，含评估分数
     image_url: str
@@ -255,7 +254,7 @@ type WorkspaceDraft = {
 
 约束：
 - E-1 先实现 UI 状态和 SSE 展示，不要求所有滑块立即影响真实生成 API。
-- E-2 起参考图上传必须带 `intent`；当前 `backend/agent/state.py` 尚未包含 `reference_intent` / `intent_note`，E-2 需要同步补齐代码类型、请求 schema 和持久化策略。
+- E-2 起参考图上传必须带 `intent`；`backend/agent/state.py`、请求 schema 和前端草稿同步支持 `reference_intent` / `intent_note`，持久化策略为按 `sessionId` 存 `localStorage`。
 - 提示词展示优先消费 `enhance_prompt` 结果；用户手动编辑后的 prompt 需作为下一轮消息上下文传回 Agent，避免只停留在前端。
 
 ### DesignState 结构
@@ -747,20 +746,21 @@ async def evaluate_generated_image(
 
 ### 追踪方式：`@observe` 显式装饰
 
-每个节点函数和工具函数都加 `@observe()`，追踪粒度到函数级别。LLM 调用内部细节通过 `langfuse_context` 手动关联。
+每个节点函数和工具函数都加 `@observe()`，追踪粒度到函数级别。当前项目使用 Langfuse 4.x 顶层 API，并通过 `core/observability.py` 封装配置、no-op fallback 和输入输出更新。
 
 **入口 Trace**：每轮用户消息在 `chat.py` 路由处包一个最外层 Trace，内部所有被装饰的节点和工具自动成为子 Span。
 
 ```python
-from langfuse.decorators import observe, langfuse_context
+from core.observability import observe, start_observation, update_current_span
 
-@observe(name="agent:turn")   # 最外层 Trace
 async def handle_message(session_id: str, message: str):
-    langfuse_context.update_current_trace(
-        session_id=session_id,
-        user_id="anonymous"
-    )
-    await graph.ainvoke(...)
+    with start_observation(
+        name="agent:turn",
+        as_type="agent",
+        input=message,
+        metadata={"session_id": session_id},
+    ):
+        await graph.ainvoke(...)
 ```
 
 **Agent 节点**（当前只有一个 `agent` 决策节点；生成、评估、重试由确定性子流程节点控制）：
@@ -768,12 +768,12 @@ async def handle_message(session_id: str, message: str):
 ```python
 @observe(name="node:agent")
 async def agent_node(state: AgentState) -> AgentState:
-    langfuse_context.update_current_observation(
+    update_current_span(
         input=state["messages"][-1].content,
         metadata={"design_state": state["design_state"], "retry_count": state["retry_count"]}
     )
     result = await llm.ainvoke(...)
-    langfuse_context.update_current_observation(output=result.content)
+    update_current_span(output=result.content)
     return state
 ```
 
@@ -933,7 +933,7 @@ raise TimeoutError("generation timeout")
 
 Agent 收到后将 `url`、`intent`、`note` 存入 `AgentState.reference_images`，并调用 `analyze_reference_image(image_url=url)` 进行视觉分析。C-5 当前评估仍使用整体参考图相似度；按参考意图动态调整评估权重属于后续扩展。
 
-当前实现状态：`POST /api/upload` 只负责上传并返回 `{file_id, url}`；`POST /api/chat/sessions/{session_id}/messages` 当前请求体只有 `content`。E-2 才扩展 `reference_images` / `workspace` payload，并同步更新后端 schema 与 Agent 状态。
+当前实现状态：`POST /api/upload` 返回 `{file_id, url}`；`POST /api/chat/sessions/{session_id}/messages` 已支持 `reference_images` / `workspace` payload，并同步更新后端 schema 与 Agent 状态。参考图草稿由前端按 `sessionId` 存入 `localStorage`，已发送图保留展示但不再重复提交。
 
 ---
 
@@ -1036,7 +1036,7 @@ langfuse:
 
 ## Docker Compose 服务组成
 
-开发环境七个基础服务：
+开发环境基础服务：
 
 ```yaml
 services:
@@ -1063,10 +1063,25 @@ services:
     ports: ["19530:19530", "9091:9091"]
     depends_on: [etcd, minio]
 
+  langfuse-redis:
+    image: redis:7-alpine
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+
+  langfuse-minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    depends_on: [postgres, langfuse-redis, langfuse-clickhouse, langfuse-minio]
+    healthcheck: /api/health
+
   langfuse:
-    image: langfuse/langfuse:2
+    image: langfuse/langfuse:3
     ports: ["3000:3000"]
-    depends_on: [postgres]
+    depends_on: [postgres, langfuse-redis, langfuse-clickhouse, langfuse-minio, langfuse-worker]
+    healthcheck: /api/public/health
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/aigc_langfuse
 
@@ -1076,7 +1091,13 @@ services:
     depends_on: [milvus]
 ```
 
-启动顺序：postgres、redis、etcd、minio → milvus → langfuse、attu。
+启动顺序：postgres、redis、etcd、minio → milvus；同时为 Langfuse 3.x 启动专用的 `langfuse-redis` / `langfuse-clickhouse` / `langfuse-minio` / `langfuse-worker` → `langfuse`、attu。
+
+`langfuse-minio-init` 是一次性 bucket 初始化容器，执行成功后显示 `Exited` 属于正常状态。`langfuse` / `langfuse-worker` 已配置 healthcheck；如果只显示 `Started`，先等 10-30 秒或查看 `docker compose ps` / `docker compose logs langfuse langfuse-worker`。
+
+Langfuse 3.x 要求 `ENCRYPTION_KEY` 是 64 个十六进制字符（256 bit）。本地 compose 使用固定开发值；生产或共享环境必须用 `openssl rand -hex 32` 生成后替换，并保持 web / worker 两个容器一致。
+
+注意：后端当前使用 `langfuse>=4.5.1` Python SDK。该 SDK 对应 Langfuse 3.x 主线自托管架构；旧的 `langfuse/langfuse:2` 会因缺少新版 ingestion / OTEL 接口而在 export span batch 时返回 `404 Not Found`。因此本地 compose 已从 Langfuse v2 单容器升级为 Langfuse 3.x 及其依赖服务。
 
 注意：compose 中的 MinIO 是 Milvus standalone 的对象存储依赖，不代表业务上传文件已支持 MinIO。业务文件存储当前默认使用本地 `backend/uploads/`；生产目标仍是补齐 `STORAGE=minio` 分支后切换到 MinIO。
 
@@ -1173,9 +1194,9 @@ backend/tests/
 
 **A-1 基础设施启动**
 
-- [x] 编写 `docker-compose.yml`（postgres:16 / redis:7-alpine / etcd:v3.5.18 / minio / milvus:v2.4.17 / langfuse:2 / attu:v2.4）
+- [x] 编写 `docker-compose.yml`（postgres:16 / redis:7-alpine / etcd:v3.5.18 / minio / milvus:v2.4.17 / Langfuse 3.x 所需 web/worker/clickhouse/minio/redis / attu:v2.4）
 - [x] 配置 Langfuse 环境变量（`DATABASE_URL` 指向 postgres，共用实例不同 database）
-- [x] 验证七个服务全部健康启动（`docker compose up -d`）
+- [x] 验证基础服务全部健康启动（`docker compose up -d`）
 - [x] 创建 `backend/config/dashboard.yaml.example` 模板文件
 
 > ⚠️ 注意：当前 `docker-compose.yml` 使用 Milvus standalone 镜像，并显式配置 etcd 与 MinIO 作为 Milvus 依赖；这个 MinIO 暂不承载业务上传文件。
@@ -1327,7 +1348,7 @@ backend/tests/
 
 - [x] 编写 `core/llm/streaming.py`（从 LangGraph `astream_events` 过滤，映射到 7 种 SSE 事件类型，`summarize_tool_output` 转用户友好摘要）
 - [x] 编写 `backend/api/routes/chat.py`（`POST /api/chat/sessions/{id}/messages` 提交消息并返回 `stream_id`；`GET /api/chat/sessions/{id}/stream?stream_id=xxx` 返回 SSE，事件 id 递增，支持 `Last-Event-ID` 断线重连）
-- [ ] 加最外层 `@observe(name="agent:turn")` Trace
+- [x] 加最外层 `agent:turn` Trace（Langfuse 4.x 使用 `start_as_current_observation`，由 `core/observability.py` 封装）
 
 > ⚠️ 注意：原生 `EventSource` 只能发 GET 请求，因此消息提交和 SSE 订阅必须拆开。FastAPI SSE 响应需设置 `Content-Type: text/event-stream` 和 `Cache-Control: no-cache`，并在每个事件后 flush。断线重连时按 `stream_id` + `Last-Event-ID` 续传，需在内存或 Redis 中短暂缓存最近的事件序列（TTL 60s 即可）。
 
@@ -1344,10 +1365,10 @@ backend/tests/
 
 **C-7 Langfuse 集成**
 
-- [ ] 在 `backend/main.py` 初始化 Langfuse（从 dashboard.yaml 读取 host / public_key / secret_key）
-- [ ] 所有工具函数加 `@observe()` 装饰
-- [ ] `agent` 节点函数加 `@observe(name="node:agent")`
-- [ ] 节点内用 `langfuse_context.update_current_observation()` 关联 LLM 输入输出
+- [x] 在 `backend/main.py` 初始化 Langfuse（从 dashboard.yaml 读取 host / public_key / secret_key；配置为空时显式禁用 tracing）
+- [x] 关键工具函数加 `@observe()` 装饰（参考图分析、风格查询、RAG stub、prompt 构建/修正、图像生成、图像评估）
+- [x] `agent` 节点函数加 `@observe(name="node:agent")`
+- [x] 节点内用 `core.observability.update_current_span()` / `update_current_generation()` 关联 LLM 输入输出、中间状态、评分和 fallback 信息
 - [ ] 验证 Langfuse UI 中能看到完整 Trace 树
 
 **C-8 配置与文档漂移修正（D/E 前置）**
@@ -1453,18 +1474,22 @@ backend/tests/
 
 ## 当前状态
 
-**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 主体已完成（参考图上传/意图/发送标记/payload 扩展），待补参考图 localStorage 持久化与端到端验证。下一步：补齐 E-2 参考图持久化，然后做 E-3 prompt 实时同步。
+**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 持久化。下一步：E-3 prompt 实时同步。
 
 **建议执行顺序（2026-05-08 调整）**：
 1. ~~C-6.1~~、~~C-8~~、~~E-1~~：已完成。
-2. E-2 收尾：参考图列表按 sessionId 存 localStorage，刷新/切换 session 后恢复。
+2. ~~E-2~~：已完成参考图列表按 sessionId 存 localStorage，刷新/切换 session 后恢复。
 3. E-3：后端补 `prompt_update` SSE 事件；前端消费并更新右侧 prompt 草稿；参数滑块与风格模板。
 4. E-4 ~ E-5：生成图批注下载、存入图库、全流程联调。
 5. D-1 ~ D-4：image-rag-mcp 图库、Milvus/PG 存储与检索，替换 `search_similar_cases` stub。
 6. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-08：Langfuse 部署升级策略调整为“SDK 4.x 对齐 Langfuse 3.x 主线”，而不是追求不存在的“server 4.x”。当前后端依赖是 `langfuse==4.5.1`，原 compose 使用 `langfuse/langfuse:2` 会在 span export 时返回 `404 Not Found`。现已将 `docker-compose.yml` 升级为 Langfuse 3.x 所需的 `langfuse` + `langfuse-worker` + `langfuse-clickhouse` + `langfuse-minio` + `langfuse-redis` 组合，并保留业务侧原有 `redis` / `minio` 供 Celery / Milvus 使用，避免基础设施相互污染。后续本地验证需执行 `docker compose up -d langfuse-redis langfuse-clickhouse langfuse-minio langfuse-minio-init langfuse-worker langfuse` 并重新生成 Langfuse project keys 填回 Dashboard。
+- 2026-05-08：修复 Langfuse 3.x 启动失败：web / worker 日志报 `ENCRYPTION_KEY must be 256 bits, 64 string characters in hex format`，原因是 compose 中临时全 0 值未通过当前版本校验。已替换为 64 位 hex 开发值；生产环境需使用 `openssl rand -hex 32` 生成真实密钥，并保证 `langfuse` 与 `langfuse-worker` 使用同一个值。
+- 2026-05-08：C-7 关键观测先落地，不等待完整 UI 联调：新增 `backend/core/observability.py` 统一封装 Langfuse 4.x 顶层 API（`observe`、`start_as_current_observation`、`update_current_span`、`update_current_generation`），FastAPI lifespan 从 Dashboard 配置初始化 Langfuse，配置为空时显式禁用 tracing；Chat SSE 每轮包 `agent:turn` 父观测，`agent` / `rag_gate` / `enhance_prompt` / `generate_image` / `evaluate_image` / `refine_prompt` 节点记录输入输出与路由状态，参考图分析、风格查询、RAG stub、prompt 构建/修正、图像生成、图像评估工具记录关键 LLM 原始输出、解析结果、fallback、评分和任务信息。C-7 仍保留“Langfuse UI 完整 Trace 树验证”未勾选，需填入真实 Langfuse key 后跑一轮对话确认。
 - 2026-05-08：E-2 参考图持久化策略：参考图列表是前端草稿状态，不需要后端持久化；以 `sessionId` 为 key 存 `localStorage`，切换/刷新后恢复。已发送的图标记 `sent: true` 保持显示，用户手动删除才消失；下次发消息只发 `sent === false` 的图，避免重复提交给 Agent。
+- 2026-05-08：E-2 已完成收尾实现：参考图上传、意图选择、`reference_images` / `workspace` payload、`ReferenceImageAnalysis.reference_intent` / `intent_note`、以及按 `sessionId` 的 `localStorage` 持久化均已落地；阶段下一步切换到 E-3 的 prompt 实时同步。
 - 2026-05-08：E-3 prompt 实时同步策略：后端在 `enhance_prompt_node` / `refine_prompt_node` 完成后通过 `QueueEmitter` 推送 `prompt_update` SSE 事件（含 `prompt`、`negative_prompt`、`source` 字段）；前端消费后更新 `workspaceStore.promptDraft` / `negativePromptDraft`；用户手动编辑 prompt 后随下一条消息的 `workspace` payload 传给 Agent，Agent 能在 HumanMessage 上下文中读取。用户修改 prompt 注入 Agent 的链路在 E-2 已实现，E-3 补齐 Agent → 前端的反向同步。
 - 2026-05-06：完成 `sessions.title` schema 漂移修复：当前后端 SQLAlchemy `Session` 模型、`create_session` 逻辑和前端会话列表均已依赖 `title` 字段，但 FastAPI 启动阶段使用的 `Base.metadata.create_all()` 只能创建缺失表，不能为已存在的 `sessions` 表自动补列，导致旧开发库在访问 `/chat/new` 时插入 `title` 失败。现已在 `backend/models/schema_guard.py` 增加启动期 schema guard，并在 FastAPI lifespan 中于 `create_all()` 后执行；当检测到旧 `sessions` 表缺少 `title` 列时，自动执行 `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS title VARCHAR(255) NOT NULL DEFAULT 'Unnamed Chat';` 补齐结构。补充单元测试覆盖“表不存在 / 列已存在 / 缺列自动补齐”三种场景。验收标准保持不变：旧数据库不删库重启后可成功 `POST /api/sessions`，`GET /api/sessions` 返回 `title`，前端进入 `/chat/new` 不再触发 `column "title" does not exist`。
 - 2026-05-06：工作台右侧栏宽度改为按整体比例存储与拖拽，而非固定像素宽度；`workspaceStore` 使用 `workspaceWidthRatio` 表示工作区占聊天页容器的比例，拖拽分隔条时根据当前容器宽度实时换算。为避免右栏挤压主对话区，当前允许范围设为 `22%` 到 `50%`，从而支持用户将右侧工作区拉大到页面一半，同时在窗口尺寸变化时保持相对布局稳定。
