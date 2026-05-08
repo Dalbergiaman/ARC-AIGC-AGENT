@@ -16,6 +16,23 @@ type Props = {
   sessionId: string;
 };
 
+function extractReply(raw: string): string | null {
+  let text = raw.trim();
+  if (text.startsWith("```")) {
+    const lines = text.split("\n");
+    text = lines.slice(1, lines.length - 1).join("\n").trim();
+  }
+  try {
+    const data = JSON.parse(text) as Record<string, unknown>;
+    if (typeof data.reply === "string" && data.reply.trim()) {
+      return data.reply.trim();
+    }
+  } catch {
+    // not valid JSON — keep original streamed content
+  }
+  return null;
+}
+
 export function ChatWorkspace({ sessionId }: Props) {
   const router = useRouter();
   const [streamId, setStreamId] = useState<string | null>(null);
@@ -31,11 +48,13 @@ export function ChatWorkspace({ sessionId }: Props) {
     activeToolStatus,
     generationPreviews,
     errorMessage,
+    currentAssistantText,
     setSessionId,
     setMessages,
     addUserMessage,
     beginAssistantMessage,
     appendAssistantText,
+    replaceAssistantText,
     finalizeAssistantMessage,
     setStreamState,
     setToolStatus,
@@ -154,6 +173,10 @@ export function ChatWorkspace({ sessionId }: Props) {
       setErrorMessage(message);
     },
     onDone: () => {
+      const reply = extractReply(currentAssistantText);
+      if (reply) {
+        replaceAssistantText(reply);
+      }
       setStreamState("idle");
       finalizeAssistantMessage();
       setStreamId(null);

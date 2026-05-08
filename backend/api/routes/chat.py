@@ -226,7 +226,8 @@ async def _generate_sse(
             if should_persist_assistant and event_type == "done":
                 assistant_text = "".join(assistant_text_parts).strip()
                 if assistant_text:
-                    await add_message(db, session_id, "assistant", assistant_text)
+                    reply_text = _extract_reply(assistant_text) or assistant_text
+                    await add_message(db, session_id, "assistant", reply_text)
                     try:
                         await maybe_generate_session_title(db, session_id)
                     except Exception:
@@ -257,6 +258,28 @@ async def _clear_active_run(
     active_run = await redis.get(active_key)
     if active_run == stream_id:
         await redis.delete(active_key)
+
+
+def _extract_reply(raw: str) -> str | None:
+    """Extract the 'reply' field from agent JSON output.
+
+    The agent streams raw JSON (including design_state_updates, phase, etc.).
+    Only the 'reply' field should be persisted and shown to the user.
+    Falls back to None if parsing fails, so callers can keep the raw text.
+    """
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        text = "\n".join(lines[1:-1]).strip()
+    try:
+        import json as _json
+        data = _json.loads(text)
+        reply = data.get("reply", "")
+        if isinstance(reply, str) and reply.strip():
+            return reply.strip()
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------

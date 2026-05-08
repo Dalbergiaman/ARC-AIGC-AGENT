@@ -36,7 +36,7 @@ def agent_system(
         kw = ", ".join(style_keywords.get("positive", [])[:5])
         desc = style_keywords.get("description", "")
         style_section = (
-            f"【风格参考：{style_keywords.get('style')}】\n"
+            f"【用户指定的风格参考：{style_keywords.get('style')}】\n"
             f"  氛围：{style_keywords.get('mood', '')}\n"
             f"  说明：{desc}\n"
             f"  关键词：{kw}"
@@ -107,7 +107,7 @@ def agent_system(
 
 规则：
 - `design_state_updates` 只填本轮有变化的字段，未变化的字段留空字符串
-- `reply` 是展示给用户的回复，不要暴露 JSON 结构或技术细节
+- `reply` 是展示给用户的回复，不要暴露 JSON 结构或技术细节, 不管用户提出什么问题，你都必须为reply提供一个有用的回答，不能直接说“请提供更多信息”或者“我不清楚”甚至直接是空字段，而是要引导用户提供缺失的信息，例如“这个设计是面向住宅还是商业用途呢？”或者“您更倾向于现代风格还是传统风格呢？”等引导性问题。
 - 若 `ready_to_generate` 为 true，`phase` 改为 `generating`
 - 若用户中断，`phase` 改为 `interrupted`，`ready_to_generate` 为 false"""
 

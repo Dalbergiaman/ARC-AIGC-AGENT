@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 
+import { getApiBaseUrl } from "@/lib/api";
 import type { SSEEventType } from "@/lib/types";
 
 type Handlers = {
@@ -60,7 +61,7 @@ export function useSSE({
     }
 
     const eventSource = new EventSource(
-      `/api/chat/sessions/${sessionId}/stream?stream_id=${streamId}`,
+      `${getApiBaseUrl()}/api/chat/sessions/${sessionId}/stream?stream_id=${streamId}`,
     );
 
     const handleEvent = (eventType: SSEEventType, event: MessageEvent<string>) => {

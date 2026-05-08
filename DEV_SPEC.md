@@ -326,7 +326,7 @@ Agent 不完全依赖 ReAct 自由调用完整生成链路。单一 `agent` 节�
 | 评估分数兜底 | `retry_count == 3` 时返回当前最佳结果 | `best_generation_result` | 当前 state 保留最佳结果；用户可见的"最大重试"文案需前端/Agent 回复补齐 |
 | 结构化输出 | Pydantic schema 校验 | 工具内解析失败重试 1 次 | prompt/evaluator 已有 fallback；agent 节点 JSON 解析失败走追问兜底 |
 
-**用户中断实现说明**：当前主链路用 Redis `active_run:{session_id}` 记录会话正在运行的 `run_id`；收到新消息时设置上一轮 `cancel:{session_id}:{run_id}`。`generate_image` 轮询内检查 cancel flag 并抛 `CancelledError`。`interrupt_before=["agent"]` 已在 Graph 编译时配置，但 C-6.1 当前没有在 chat 路由里通过 `graph.update_state` 恢复旧 run；新的用户消息会启动新的 `stream_id/run_id`。
+**用户中断实现说明**：当前主链路用 Redis `active_run:{session_id}` 记录会话正在运行的 `run_id`；收到新消息时设置上一轮 `cancel:{session_id}:{run_id}`。`generate_image` 轮询内检查 cancel flag 并抛 `CancelledError`。`interrupt_before=["agent"]` 已从 Graph 编译配置中移除——该选项需要配套的 `graph.update_state` 恢复逻辑，当前 chat 路由每次新消息都是全新的 `astream_events` 调用，保留该选项会导致 agent 节点永远不执行；用户中断依赖 Redis cancel flag 实现，不依赖 LangGraph interrupt 机制。
 
 **`generate_image` 轮询内的中断**：使用 Redis cancel flag（key：`cancel:{session_id}:{run_id}`）。FastAPI 收到新用户消息时设置当前 `run_id` 的 cancel flag；`generate_image` 轮询每次 `asyncio.sleep(2)` 后检查 Redis，检测到后抛 `CancelledError` 提前退出。新一轮用户消息使用新的 `run_id`，避免上一轮取消信号误触发后续生成。
 
@@ -342,7 +342,7 @@ session_id 在整个对话窗口内不变；run_id 每轮 Agent 执行生成一�
 
 | 事件类型 | 触发时机 | data 结构 |
 |----------|----------|-----------|
-| `text_delta` | LLM token 流式输出；若节点使用 `_llm.ainvoke`，当前实现会以 `on_chain_stream` 中的完整 AI 文本兜底输出 | `{"content": "..."}` |
+| `text_delta` | LLM token 流式输出；`agent_node` 当前优先通过 `_llm.astream` 直接推送模型原文到 SSE，其他节点仍可由 `on_chain_stream` 兜底 | `{"content": "..."}` |
 | `tool_start` | Agent 开始调用工具 | `{"tool": "analyze_reference_image", "input": {...}}` |
 | `tool_end` | 工具调用完成 | `{"tool": "...", "summary": "用户友好的一句话摘要"}` |
 | `generation_start` | 图像生成任务提交 | `{"task_id": "xxx", "run_id": "..."}` |
@@ -360,7 +360,8 @@ session_id 在整个对话窗口内不变；run_id 每轮 Agent 执行生成一�
 从 LangGraph `astream_events` 过滤并映射到上述协议：
 
 - `on_chat_model_stream` → `text_delta`
-- `on_chain_stream` 中提取到的 AIMessage → `text_delta` 兜底（C-6.1 当前路径，通常是完整文本而非逐 token）
+- `agent_node` 内部通过 `QueueEmitter.emit("text_delta", ...)` 直接透传 `_llm.astream` 产出的模型文本
+- `on_chain_stream` 中提取到的 AIMessage → `text_delta` 兜底（适用于未走显式流式透传的节点）
 - `on_tool_start` → `tool_start`
 - `on_tool_end` → `tool_end`（原始输出经 `summarize_tool_output` 转为用户友好摘要）
 - `generate_image` 工具内部完成后额外推送 `generation_start` / `generation_done`
@@ -1473,6 +1474,8 @@ backend/tests/
 - 2026-05-06：C-8 完成：`dashboard_service.py` 补齐 `embedding` 默认配置与 provider 列表，image provider 从残留 `openrouter` 改为 `grsai`，并增加 `__main__` 自检入口；`dashboard.py` 接受 `embedding` patch；`dashboard.yaml.example` 补齐 `embedding` 配置块并统一 `grsai` 命名；前端 `types.ts` 增加 `image_provider.model` 与 `embedding` 类型，Dashboard 新增 Embedding tab，图像生成平台配置增加 model 选择；`agent_graph.mmd` 改为当前 `agent -> rag_gate -> enhance_prompt -> generate_image -> evaluate_image -> refine_prompt` 的确定性子流程；`tests/services/test_dashboard_service.py` 更新为 `grsai`/`embedding` 并通过；前端 `npm run lint` 通过。
 - 2026-05-06：前端目标调整为图像生成三栏工作台：左侧 Sidebar（历史对话、知识库、首页跳转、Dashboard、折叠）、中间多轮对话与生成图缩略图、右侧 Workspace 标签页（提示词与参考图 / 生成图片）。参考图上传需支持用户标注参考意图（构图、色彩、建筑样式、材质、光线、环境、其他）；右侧展示并允许编辑 prompt、参数滑块和风格模板；生成图支持预览、下载、Canvas 批注，批注图首版作为新参考图进入下一轮。E 阶段拆分为 E-1 三栏骨架、E-2 参考图工作区、E-3 参数/风格/prompt 同步、E-4 生成图批注下载、E-5 全流程联调。
 - 2026-05-06：新增 `backend/scripts/test_chat_sse_flow.py` 独立联调脚本，连接真实 Docker Postgres/Redis，但使用 fake graph 避免真实 LLM/API 调用；覆盖消息去重、assistant 落库、Redis event buffer、`Last-Event-ID` 保守 replay、active run cancel 语义；在沙箱外运行 `.venv/bin/python scripts/test_chat_sse_flow.py` 通过。
+- 2026-05-08：为恢复前端主对话链路，`agent_node` 改为优先调用 `_llm.astream`，将模型原始输出直接经 `QueueEmitter` 作为 `text_delta` 推送给前端；节点结束后仍对完整输出做 JSON 解析并更新 `design_state`、`phase`、`ready_to_generate`。当前 assistant 展示内容是模型原文，不再在 `agent_node` 内提取 `reply` 字段生成聊天消息；后续如需“流式展示原文，结束后替换为 reply 字段”，需在 SSE/前端消息状态上增加一次完成后替换逻辑。
+- 2026-05-08：继续排查前端无流式显示问题后，确认高风险点在 Next.js 开发代理对 SSE 的转发链路。前端 `fetch` 与 `EventSource` 现统一支持通过 `NEXT_PUBLIC_API_BASE_URL` 直连后端，开发默认值设为 `http://localhost:8000`；`useSSE` 不再依赖相对路径 `/api/...`；后端 `main.py` 补充 `CORSMiddleware`，允许 `localhost/127.0.0.1:3000/3001` 跨域访问。此改动优先保证本地开发环境下 SSE 稳定直连，不再依赖 Next rewrite 对流式的兼容性。
 - 2026-05-06：C-6.1 代码硬化完成：`POST /messages` 继续写 DB，Redis pending key 改为只存 `message_id` 作为 stream_id 首连握手，`GET /stream` 从 DB 最近 20 条构造 Graph 输入且不再追加 pending 内容；SSE 首次运行时收集 `text_delta` 并在 `done` 后写入 assistant 消息，断线重连不落库；新增 `active_run:{session_id}` 和 `cancel:{session_id}:{run_id}`，新消息会取消旧 run；`Last-Event-ID > 0` 采用保守重连语义，只 replay Redis event buffer，不重新运行 Agent；由于当前 `agent_node` 使用 `_llm.ainvoke`，`text_delta` 先用 `on_chain_stream` 中 AIMessage 的完整内容做兜底输出，不是真正逐 token 流式，后续如需打字机效果需单独重构。
 - 2026-05-06：梳理当前架构与技术文档后，决定先不直接进入 D/E 大功能开发；新增 C-6.1 用于修稳后端 Chat/SSE 主链路（消息去重、AI 回复落库、`text_delta` 来源、新消息中断旧 run、断线重连验证），新增 C-8 用于修正 Dashboard provider/model/embedding 配置、`agent_graph.mmd` 和 `DEV_SPEC.md` 的实现漂移；推荐顺序调整为 C-6.1 → C-8 → E-1 → D → E-2/E-5 → C-7。
 - 2026-05-05：C-6 完成（@observe 留 C-7）：`streaming.py` 用 ContextVar 注入 QueueEmitter，同时消费 `astream_events` 和 emitter queue，映射 7 种 SSE 事件；`chat.py` 两端点（POST 提交消息存 Redis pending key，GET 消费 SSE），stream_id == run_id，Redis 缓冲 TTL 60s 支持 Last-Event-ID 断线重连；`generate_image_node` 从 ContextVar 读取 emitter；chat router 注册到 main.py。

@@ -7,8 +7,13 @@ import type {
   SubmitMessageResponse,
 } from "@/lib/types";
 
+export function getApiBaseUrl(): string {
+  return process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
+}
+
 async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, {
+  const url = typeof input === "string" ? `${getApiBaseUrl()}${input}` : input;
+  const response = await fetch(url, {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -55,7 +60,7 @@ export function getSession(sessionId: string): Promise<SessionDetailResponse> {
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
-  const response = await fetch(`/api/sessions/${sessionId}`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/sessions/${sessionId}`, {
     method: "DELETE",
     cache: "no-store",
   });

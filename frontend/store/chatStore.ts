@@ -18,6 +18,7 @@ type ChatStore = {
   addUserMessage: (content: string) => void;
   beginAssistantMessage: () => void;
   appendAssistantText: (content: string) => void;
+  replaceAssistantText: (content: string) => void;
   finalizeAssistantMessage: () => void;
   setStreamState: (state: StreamState) => void;
   setToolStatus: (status: ToolStatus | null) => void;
@@ -101,6 +102,18 @@ export const useChatStore = create<ChatStore>((set) => ({
           message.id === state.currentAssistantMessageId
             ? { ...message, content: nextText }
             : message,
+        ),
+      };
+    }),
+  replaceAssistantText: (content) =>
+    set((state) => {
+      if (!state.currentAssistantMessageId) return state;
+      return {
+        currentAssistantText: content,
+        messages: state.messages.map((msg) =>
+          msg.id === state.currentAssistantMessageId
+            ? { ...msg, content }
+            : msg,
         ),
       };
     }),

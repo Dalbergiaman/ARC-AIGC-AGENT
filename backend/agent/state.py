@@ -33,6 +33,8 @@ class ReferenceImageAnalysis(TypedDict, total=False):
     viewpoint: str
     color_palette: str
     description: str
+    reference_intent: str  # user-annotated intent: composition/color/style/material/lighting/surroundings/other
+    intent_note: str       # optional user note about the intent
 
 
 class GenerationResult(TypedDict, total=False):

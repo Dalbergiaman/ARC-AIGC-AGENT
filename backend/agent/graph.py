@@ -1,6 +1,7 @@
 """LangGraph Agent graph definition."""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Literal
@@ -93,7 +94,22 @@ async def agent_node(state: AgentState) -> dict:
         *messages,
     ]
 
-    raw = await _llm.ainvoke(llm_messages)
+    emitter = get_current_emitter()
+    raw_parts: list[str] = []
+
+    try:
+        stream = await _llm.astream(llm_messages)
+        async for chunk in stream:
+            if not chunk:
+                continue
+            raw_parts.append(chunk)
+            if emitter is not None:
+                await emitter.emit("text_delta", {"content": chunk})
+        raw = "".join(raw_parts)
+    except Exception:
+        raw = await _llm.ainvoke(llm_messages)
+        if emitter is not None and raw:
+            await emitter.emit("text_delta", {"content": raw})
 
     text = raw.strip()
     if text.startswith("```"):
@@ -108,7 +124,7 @@ async def agent_node(state: AgentState) -> dict:
         return {
             **updates,
             "design_state": update_completeness(design_state),
-            "messages": [AIMessage(content="请继续描述您的设计需求。")],
+            "messages": [] if emitter is not None else [AIMessage(content=raw or "请继续描述您的设计需求。")],
             "phase": "collecting",
         }
 
@@ -126,12 +142,10 @@ async def agent_node(state: AgentState) -> dict:
 
     ready = bool(data.get("ready_to_generate", False))
     phase = data.get("phase", "collecting")
-    reply = data.get("reply", "")
-
     result: dict = {
         **updates,
         "design_state": design_state,
-        "messages": [AIMessage(content=reply)] if reply else [],
+        "messages": [] if emitter is not None else [AIMessage(content=raw)] if raw else [],
         "phase": phase,
         "ready_to_generate": ready,
     }
@@ -336,5 +350,4 @@ def build_graph() -> StateGraph:
 def compile_graph(checkpointer: BaseCheckpointSaver) -> CompiledStateGraph:
     return build_graph().compile(
         checkpointer=checkpointer,
-        interrupt_before=["agent"],
     )
