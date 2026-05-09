@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Upload, X } from "lucide-react";
 
-import { getApiBaseUrl } from "@/lib/api";
+import { getApiBaseUrl, listStyleTemplates } from "@/lib/api";
 import { useWorkspaceStore } from "@/store/workspaceStore";
-import type { ReferenceIntent } from "@/lib/types";
+import type { ReferenceIntent, StyleTemplate } from "@/lib/types";
 
 const INTENT_LABELS: Record<ReferenceIntent, string> = {
   composition: "构图",
@@ -25,21 +25,51 @@ type Props = {
 
 export function PromptReferenceTab({ sessionId }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [styleTemplates, setStyleTemplates] = useState<StyleTemplate[]>([]);
+  const [styleTemplateError, setStyleTemplateError] = useState<string | null>(null);
   const {
     promptDraft,
     getReferenceImages,
-    setPromptDraftField,
-    setPromptDraft,
+    setSessionPromptDraftField,
+    setSessionPromptDraft,
+    setSessionPromptTemplate,
     addReferenceImage,
     updateReferenceImage,
     removeReferenceImage,
   } = useWorkspaceStore();
 
   const referenceImages = getReferenceImages(sessionId);
+  const selectedTemplateName = promptDraft.prompt_template?.style ?? "";
   const prettyDraft = useMemo(
     () => JSON.stringify(promptDraft, null, 2),
     [promptDraft],
   );
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadStyleTemplates() {
+      try {
+        const templates = await listStyleTemplates();
+        if (!active) return;
+        setStyleTemplates(templates);
+        setStyleTemplateError(null);
+      } catch (error) {
+        if (!active) return;
+        setStyleTemplateError(error instanceof Error ? error.message : "风格模板加载失败");
+      }
+    }
+
+    loadStyleTemplates();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  function handleTemplateChange(value: string) {
+    const template = styleTemplates.find((item) => item.style === value) ?? null;
+    setSessionPromptTemplate(sessionId, template);
+  }
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
@@ -82,11 +112,12 @@ export function PromptReferenceTab({ sessionId }: Props) {
           <span className="text-xs font-medium text-foreground">Prompt 草稿 JSON</span>
           <button
             type="button"
-            onClick={() => setPromptDraft({
+            onClick={() => setSessionPromptDraft(sessionId, {
               keywords: {},
               llm_description: "",
               custom_description: "",
               negative_prompt: "",
+              prompt_template: promptDraft.prompt_template,
             })}
             className="text-xs text-muted-foreground hover:text-foreground"
           >
@@ -100,12 +131,33 @@ export function PromptReferenceTab({ sessionId }: Props) {
 
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-foreground">风格模板</span>
+          {styleTemplateError && (
+            <span className="text-[11px] text-red-500">加载失败</span>
+          )}
+        </div>
+        <select
+          value={selectedTemplateName}
+          onChange={(e) => handleTemplateChange(e.target.value)}
+          className="w-full rounded-xl border border-black/8 bg-white px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-black/20"
+        >
+          <option value="">不选择模板</option>
+          {styleTemplates.map((template) => (
+            <option key={template.style} value={template.style}>
+              {template.style}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-foreground">custom_description</span>
           <span className="text-[11px] text-muted-foreground">用户可直接编辑的自由描述</span>
         </div>
         <textarea
           value={promptDraft.custom_description}
-          onChange={(e) => setPromptDraftField("custom_description", e.target.value)}
+          onChange={(e) => setSessionPromptDraftField(sessionId, "custom_description", e.target.value)}
           placeholder="在这里补充你希望模型严格遵守的画面描述"
           rows={5}
           className="w-full resize-none rounded-xl border border-black/8 bg-white px-3 py-2.5 text-sm leading-5 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-black/20"
@@ -131,7 +183,7 @@ export function PromptReferenceTab({ sessionId }: Props) {
         </div>
         <textarea
           value={promptDraft.negative_prompt}
-          onChange={(e) => setPromptDraftField("negative_prompt", e.target.value)}
+          onChange={(e) => setSessionPromptDraftField(sessionId, "negative_prompt", e.target.value)}
           placeholder="不希望出现的元素"
           rows={2}
           className="w-full resize-none rounded-xl border border-black/8 bg-white px-3 py-2.5 text-sm leading-5 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-black/20"

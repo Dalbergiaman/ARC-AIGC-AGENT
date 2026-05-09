@@ -10,6 +10,7 @@ from agent.graph import compile_graph
 from api.routes.chat import router as chat_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.session import router as session_router
+from api.routes.styles import router as styles_router
 from api.routes.upload import router as upload_router
 from config import settings
 from core.observability import configure_langfuse_from_dashboard, flush_langfuse
@@ -51,6 +52,7 @@ app.add_middleware(
 app.include_router(chat_router)
 app.include_router(dashboard_router)
 app.include_router(session_router)
+app.include_router(styles_router)
 app.include_router(upload_router)
 
 

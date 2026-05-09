@@ -16,6 +16,13 @@ class FakeGraph:
                     "llm_description": "modern villa with clean lines",
                     "custom_description": "",
                     "negative_prompt": "blurry",
+                    "prompt_template": {
+                        "style": "现代主义",
+                        "positive": ["modernist architecture"],
+                        "negative": ["traditional ornament"],
+                        "mood": "理性、开放、通透",
+                        "description": "现代主义建筑说明",
+                    },
                     "source": "enhance_prompt",
                 },
             )

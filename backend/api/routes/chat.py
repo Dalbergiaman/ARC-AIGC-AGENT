@@ -96,6 +96,7 @@ class WorkspacePayload(BaseModel):
     llm_description: str = ""
     custom_description: str = ""
     negative_prompt: str = ""
+    prompt_template: dict | None = None
 
 
 class MessageRequest(BaseModel):
@@ -143,6 +144,7 @@ async def submit_message(
                 body.workspace.llm_description,
                 body.workspace.custom_description,
                 body.workspace.negative_prompt,
+                body.workspace.prompt_template,
             ]
         ):
             ws_key = f"workspace:{session_id}:{stream_id}"

@@ -233,8 +233,17 @@ class ImageRecord(TypedDict):
 
 ```ts
 type WorkspaceDraft = {
-  prompt: string
-  negativePrompt: string
+  keywords: Record<string, string>
+  llm_description: string
+  custom_description: string
+  negative_prompt: string
+  prompt_template: {
+    style: string
+    positive: string[]
+    negative: string[]
+    mood: string
+    description: string
+  } | null
   referenceImages: Array<{
     fileId: string
     url: string
@@ -248,14 +257,26 @@ type WorkspaceDraft = {
     materialStrength?: number
     compositionStrength?: number
   }
-  selectedStyle?: string
 }
 ```
 
 约束：
 - E-1 先实现 UI 状态和 SSE 展示，不要求所有滑块立即影响真实生成 API。
-- E-2 起参考图上传必须带 `intent`；`backend/agent/state.py`、请求 schema 和前端草稿同步支持 `reference_intent` / `intent_note`，持久化策略为按 `sessionId` 存 `localStorage`。
-- 提示词展示优先消费 `enhance_prompt` 结果；用户手动编辑后的 prompt 需作为下一轮消息上下文传回 Agent，避免只停留在前端。
+- E-2/E-3 当前临时实现：参考图草稿与结构化 prompt 草稿按 `sessionId` 存 `localStorage`，用于单浏览器刷新/关闭后恢复。
+- E-3.5 起必须把会话业务状态迁移到 PostgreSQL：结构化 prompt 草稿、已上传参考图、已生成图片结果应随 session 服务端恢复；`localStorage` 只保留布局偏好和未提交的临时 UI 状态。
+- 提示词展示优先消费 `prompt_update` / `enhance_prompt` 结果；`keywords`、`llm_description`、`custom_description`、`negative_prompt`、`prompt_template` 整份结构化草稿必须作为 session 业务状态保存。用户手动编辑后的 prompt 需作为下一轮消息上下文传回 Agent，避免只停留在前端。
+
+### 持久化边界（E-3.5 起执行）
+
+| 状态 | 当前实现 | 目标持久化 | 原因 |
+|------|----------|------------|------|
+| 会话列表 / 标题 | PostgreSQL `sessions` | PostgreSQL | 历史会话核心数据 |
+| 聊天消息 | PostgreSQL `messages` | PostgreSQL | 历史对话核心数据 |
+| 结构化 prompt 草稿（`keywords` / `llm_description` / `custom_description` / `negative_prompt` / `prompt_template`） | `localStorage.promptDraftBySession` | PostgreSQL，建议存 `sessions.workspace_state` JSON 或等价字段 | 与 session 强绑定，应跨浏览器/设备恢复 |
+| 已上传参考图（`fileId` / `url` / `intent` / `note` / `sent` / `analysis`） | `localStorage.referenceImagesBySession` + AgentState | PostgreSQL `reference_images.analysis` JSON | 参考图是会话输入资产，不应只存在浏览器 |
+| 生成图结果（任务 ID、prompt、negative prompt、image_url、provider、score、raw_response） | 前端内存 `generationPreviews` + AgentState | PostgreSQL `generation_tasks` 或扩展后的生成结果表 | E-4 生成图片区刷新后必须可恢复 |
+| 右侧栏宽度、折叠状态、当前 tab | 前端内存 / 可选 localStorage | `localStorage` | 浏览器 UI 偏好，不属于业务状态 |
+| 上传中、错误提示、当前 SSE stream、工具状态 | 前端内存 | 不持久化 | 临时运行状态，刷新后应重新计算或丢弃 |
 
 ### DesignState 结构
 
@@ -937,6 +958,7 @@ raise TimeoutError("generation timeout")
 Agent 收到后将 `url`、`intent`、`note` 存入 `AgentState.reference_images`，并调用 `analyze_reference_image(image_url=url)` 进行视觉分析。C-5 当前评估仍使用整体参考图相似度；按参考意图动态调整评估权重属于后续扩展。
 
 当前实现状态：`POST /api/upload` 返回 `{file_id, url}`；`POST /api/chat/sessions/{session_id}/messages` 已支持 `reference_images` / `workspace` payload，并同步更新后端 schema 与 Agent 状态。参考图草稿由前端按 `sessionId` 存入 `localStorage`，已发送图保留展示但不再重复提交。
+E-3.5 起需将参考图会话状态写入 PostgreSQL `reference_images`：`analysis` JSON 中保存 VLM 分析、用户 `intent/note`、发送状态等；前端 `localStorage` 只作为未同步草稿和 UI 恢复兜底。
 
 ---
 
@@ -987,7 +1009,7 @@ image_library (
 )
 ```
 
-当前实现状态：四张主业务表已由 SQLAlchemy 定义并在 FastAPI lifespan 中自动创建；`messages` 已用于 Chat/SSE 主链路，`sessions.design_state`、`reference_images`、`generation_tasks` 的业务写入仍未完整接入。E-2 接入参考图意图时需决定 `reference_images.analysis` 中保存 VLM 分析、用户 `intent/note`，以及是否同步回 `AgentState.reference_images`。
+当前实现状态：四张主业务表已由 SQLAlchemy 定义并在 FastAPI lifespan 中自动创建；`messages` 已用于 Chat/SSE 主链路，`sessions.design_state`、`reference_images`、`generation_tasks` 的业务写入仍未完整接入。E-3.5 需要补齐会话业务状态持久化：新增或复用 JSON 字段保存 workspace prompt 草稿；将参考图 `intent/note/analysis/sent` 写入 `reference_images.analysis`；将生成任务 prompt、negative prompt、provider、score、raw_response 等写入 `generation_tasks` 或扩展表结构。
 
 **Milvus Collection（向量库）**
 ```
@@ -1452,10 +1474,20 @@ backend/tests/
 - [x] 后端 `agent_node` / `enhance_prompt_node` / `refine_prompt_node` 通过 `QueueEmitter` 推送结构化 `prompt_update` SSE 事件（含 `keywords`、`llm_description`、`custom_description`、`negative_prompt`、`source`）
 - [x] 前端 `useSSE` 新增 `onPromptUpdate` 回调，消费结构化 `prompt_update` 事件，更新 `workspaceStore.promptDraft`
 - [x] `SSEEventPayloadMap` / `SSEEventType` 补充 `prompt_update` 类型
-- [ ] 编写 `GenerationControls.tsx`：`temperature`、`lightingIntensity`、`stylization`、`materialStrength`、`compositionStrength` 滑块/输入框
-- [ ] 从 `prompt_templates.py` 对齐前端风格模板数据源；优先后端新增接口输出模板，避免前后端手写两份长期漂移
-- [ ] 用户选择风格模板后写入 `workspaceStore.selectedStyle`，并随下一条消息提交给 Agent
-- [ ] 验证：Agent 每轮对话后都会刷新右侧结构化 prompt 草稿；用户手动编辑 `custom_description` 后下一轮 Agent 能在上下文中读取
+- [ ] `GenerationControls.tsx` 暂缓：`temperature`、`lightingIntensity`、`stylization`、`materialStrength`、`compositionStrength` 不是百炼/火山/GrsAI 三家图像 API 的通用字段，后续如需真实参数控制再按 provider 能力单独设计
+- [x] 从 `prompt_templates.py` 对齐前端风格模板数据源；后端新增 `GET /api/styles/templates` 输出模板，避免前后端手写两份长期漂移
+- [x] 用户选择风格模板后写入 `workspaceStore.promptDraft.prompt_template`，按 `sessionId` 存 `localStorage`，并随下一条消息提交给 Agent
+- [x] 验证：Agent 每轮对话后都会刷新右侧结构化 prompt 草稿；用户手动编辑 `custom_description` 和选择 `prompt_template` 后下一轮 Agent 能在上下文中读取
+
+**E-3.5 会话工作区服务端持久化（E-4 前置）**
+
+- [ ] 新增后端 session workspace 持久化能力：建议 `sessions` 增加 `workspace_state JSON`（或等价表），保存 `keywords`、`llm_description`、`custom_description`、`negative_prompt`、`prompt_template`
+- [ ] 扩展 `GET /api/sessions/{session_id}` 返回 `workspace_state`，前端进入历史会话时优先用 PostgreSQL 恢复 prompt 草稿；`localStorage` 仅作为未同步兜底
+- [ ] 在 `POST /api/chat/sessions/{session_id}/messages` 接收 `workspace` payload 后同步写入 PostgreSQL，Agent SSE `prompt_update` 后也要持久化最新草稿，避免只存在浏览器
+- [ ] 将已上传/已发送参考图写入 `reference_images` 表，`analysis` JSON 保存 VLM 分析、`intent`、`note`、`sent` 等；前端参考图列表刷新后从后端恢复
+- [ ] 将生成任务/结果写入 PostgreSQL：保存 task_id、prompt、negative_prompt、image_url、provider、status、score、raw_response，供 E-4 生成图片区刷新后恢复
+- [ ] 明确删除会话时级联删除 workspace_state、reference_images、generation_tasks；保留 localStorage 清理作为前端辅助
+- [ ] 验证跨浏览器/清空 localStorage 后，历史消息、prompt 草稿、已发送参考图、生成图结果仍可按 session 恢复
 
 **E-4 生成图片工作区、批注与下载**
 
@@ -1477,17 +1509,22 @@ backend/tests/
 
 ## 当前状态
 
-**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 持久化。下一步：E-3 prompt 实时同步。
+**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 临时持久化；E-3 已完成 prompt 实时同步与风格模板独立注入，参数滑块因缺少跨平台通用 API 字段暂缓。下一步：E-3.5 会话工作区服务端持久化，完成后再进入 E-4 生成图片工作区。
 
 **建议执行顺序（2026-05-08 调整）**：
 1. ~~C-6.1~~、~~C-8~~、~~E-1~~：已完成。
 2. ~~E-2~~：已完成参考图列表按 sessionId 存 localStorage，刷新/切换 session 后恢复。
-3. E-3：后端补 `prompt_update` SSE 事件；前端消费并更新右侧 prompt 草稿；参数滑块与风格模板。
-4. E-4 ~ E-5：生成图批注下载、存入图库、全流程联调。
-5. D-1 ~ D-4：image-rag-mcp 图库、Milvus/PG 存储与检索，替换 `search_similar_cases` stub。
-6. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
+3. ~~E-3~~：已完成 `prompt_update` SSE、结构化 prompt 草稿与风格模板 `prompt_template` 注入；参数滑块暂缓。
+4. E-3.5：将 prompt 草稿、参考图会话状态、生成任务结果从 `localStorage` / 前端内存迁移到 PostgreSQL；这是 E-4 前置，避免生成图工作区做完后因刷新恢复能力返工。
+5. E-4 ~ E-5：生成图批注下载、存入图库、全流程联调。
+6. D-1 ~ D-4：image-rag-mcp 图库、Milvus/PG 存储与检索，替换 `search_similar_cases` stub。
+7. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-09：修复前端 `localStorage` 恢复时序问题：`localStorage` 正常刷新不会清空；此前 `workspaceStore` 使用 Zustand `skipHydration: true`，但 `ChatWorkspace` 在 `rehydrate()` 完成前加载 session 并调用 `getPromptDraft(sessionId)`，会读到空的 `promptDraftBySession` 并把空草稿写回当前 session，表现为刷新后模板和已生成 prompt 消失。现改为等待 `useWorkspaceStore.persist.rehydrate()` 完成后再加载 session 并恢复 prompt 草稿，同时移除 `PromptReferenceTab` 内重复恢复逻辑，避免组件 mount 顺序互相覆盖。
+- 2026-05-09：决定新增 E-3.5 作为 E-4 前置阶段：当前 `localStorage` 只能恢复同一浏览器的参考图和 prompt 草稿，不满足历史 session 的服务端恢复语义。E-3.5 目标是把会话业务状态迁移到 PostgreSQL：结构化 prompt 草稿存 `sessions.workspace_state` 或等价 JSON；参考图 `intent/note/sent/analysis` 存 `reference_images.analysis`；生成任务结果存 `generation_tasks` 或扩展表。`localStorage` 后续只保留布局偏好、未同步草稿兜底和临时 UI 状态。这个阶段应在 E-4 之前完成，因为 E-4 的生成图片工作区依赖生成结果刷新恢复能力，否则会返工。
+- 2026-05-09：修复 E-3 prompt 草稿刷新丢失问题：此前只有参考图和 `prompt_template` 按 `sessionId` 持久化，完整结构化草稿仍是内存状态，关闭网页后 `keywords` / `llm_description` / `custom_description` / `negative_prompt` 会丢失。现调整 `workspaceStore`，新增 `promptDraftBySession` 并持久化到 `localStorage`；SSE `prompt_update`、用户编辑 `custom_description` / `negative_prompt`、重置草稿和风格模板选择都会同步写入对应 session。进入会话时从 `promptDraftBySession[sessionId]` 恢复整份 JSON 草稿，保持历史对话与右侧 prompt 状态一致。后端 Agent 状态仍为权威决策状态，本阶段不新增数据库 schema。
+- 2026-05-09：E-3 后半完成风格模板独立注入：后端新增 `GET /api/styles/templates`，直接从 `prompt_templates.py` 暴露模板；前端右侧 Prompt 工作区新增风格模板下拉，选择后只写入结构化草稿的 `prompt_template` 字段，不覆盖 `keywords` / `llm_description` / `custom_description` / `negative_prompt`。`prompt_template` 按 `sessionId` 存 `localStorage`，随下一条消息通过 `workspace` payload 传给 Agent；`agent_system` / `enhance_prompt_system` 将其作为额外上下文使用，并明确不得覆盖用户已明确提供的字段。`prompt_update` SSE 继续保留当前模板，避免 Agent 刷新草稿时清空用户选择。参数滑块本阶段暂缓，原因是 `temperature` / `lightingIntensity` / `stylization` / `materialStrength` / `compositionStrength` 不是百炼、火山、GrsAI 三家图像生成 API 的通用字段；后续如需真实参数控制，应按 provider 能力单独设计。
 - 2026-05-08：修复聊天工作台页面级滚动问题：`ChatWorkspace` 使用 `fixed inset-0` + `overflow-hidden` 固定为全视口工作台；中栏 `ChatPanel` 使用 `grid-rows-[72px_minmax(0,1fr)_auto]`，只有 `MessageList` 所在中间行独立滚动，输入栏始终固定在中栏底部；右栏 `WorkspacePanel` 固定高度并仅内容区域独立滚动，header 固定。
 - 2026-05-08：修复偶发 `asyncpg InterfaceError: connection is closed`：后端 SQLAlchemy async engine 开启 `pool_pre_ping=True` 与 `pool_recycle=1800`，避免连接池复用被 PostgreSQL/Docker/网络关闭的旧连接。该问题发生在普通请求拿 session 查询时，根因属于连接池健康检查缺失，不在业务 service 层做散乱重试。
 - 2026-05-08：修复 `agent_node` 自动决策生成图片的问题：新增后端显式生成意图硬规则，只检查最新用户消息，支持中文“生成 / 生成图片 / 开始生成 / 开始出图 / 出图 / 渲染”等和英文 `generate / render / create image` 等命令；“不要生成 / 先不生成 / 别出图 / do not generate”等否定表达优先拦截。`agent_node` 继续让 LLM 更新 `DesignState`，但最终 `ready_to_generate` 只由该硬规则决定，LLM 返回 `phase=generating` 且用户未明确生成时会被覆盖为 `collecting`。同步更新 `agent_system` 提示词，去掉“信息完整度够即可生成”的指令。

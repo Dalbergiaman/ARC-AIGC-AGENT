@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 
 import { getApiBaseUrl } from "@/lib/api";
-import type { SSEEventType } from "@/lib/types";
+import type { SSEEventType, StyleTemplate } from "@/lib/types";
 
 type Handlers = {
   onTextDelta?: (content: string) => void;
@@ -16,6 +16,7 @@ type Handlers = {
     llmDescription: string,
     customDescription: string,
     negativePrompt: string,
+    promptTemplate: StyleTemplate | null,
     source: "agent_node" | "enhance_prompt" | "refine_prompt",
   ) => void;
   onError?: (code: string, message: string) => void;
@@ -131,6 +132,9 @@ export function useSSE({
           data.llm_description,
           data.custom_description,
           data.negative_prompt,
+          data.prompt_template && typeof data.prompt_template === "object"
+            ? data.prompt_template as StyleTemplate
+            : null,
           data.source,
         );
       }

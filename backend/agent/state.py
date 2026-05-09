@@ -42,6 +42,7 @@ class PromptDraft(TypedDict, total=False):
     llm_description: str
     custom_description: str
     negative_prompt: str
+    prompt_template: dict | None
 
 
 class GenerationResult(TypedDict, total=False):
@@ -120,6 +121,7 @@ def default_agent_state() -> dict:
             "llm_description": "",
             "custom_description": "",
             "negative_prompt": "",
+            "prompt_template": None,
         },
         "ready_to_generate": False,
         "generation_results": [],

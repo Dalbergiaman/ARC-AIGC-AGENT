@@ -4,6 +4,7 @@ import type {
   DashboardProviders,
   SessionDetailResponse,
   SessionResponse,
+  StyleTemplate,
   SubmitMessagePayload,
   SubmitMessageResponse,
 } from "@/lib/types";
@@ -44,6 +45,10 @@ export function updateDashboardConfig(patch: DashboardConfigPatch): Promise<Dash
 
 export function getDashboardProviders(): Promise<DashboardProviders> {
   return requestJson<DashboardProviders>("/api/dashboard/providers");
+}
+
+export function listStyleTemplates(): Promise<StyleTemplate[]> {
+  return requestJson<StyleTemplate[]>("/api/styles/templates");
 }
 
 export function createSession(): Promise<SessionResponse> {

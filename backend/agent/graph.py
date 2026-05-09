@@ -124,6 +124,7 @@ def _build_prompt_draft(
     llm_reply_hint: str = "",
     style_keywords: dict | None = None,
     negative_prompt: str = "",
+    prompt_template: dict | None = None,
 ) -> PromptDraft:
     return {
         "keywords": _prompt_keywords(design_state, style_keywords),
@@ -136,6 +137,7 @@ def _build_prompt_draft(
         ),
         "custom_description": custom_description or "",
         "negative_prompt": negative_prompt or "",
+        "prompt_template": prompt_template,
     }
 
 
@@ -202,6 +204,7 @@ async def agent_node(state: AgentState) -> dict:
     workspace = dict(state.get("workspace") or {})
     custom_description = str(workspace.get("custom_description", "") or "")
     prompt_hint = str(workspace.get("llm_description", "") or "")
+    prompt_template = workspace.get("prompt_template") if isinstance(workspace.get("prompt_template"), dict) else None
     updates: dict = {}
     update_current_span(
         input={
@@ -268,6 +271,7 @@ async def agent_node(state: AgentState) -> dict:
             style_keywords=style_keywords,
             reference_analysis=reference_images,
             similar_cases=similar_cases,
+            prompt_template=prompt_template,
         )),
         *messages,
     ]
@@ -337,6 +341,7 @@ async def agent_node(state: AgentState) -> dict:
         llm_reply_hint=llm_description,
         style_keywords=style_keywords,
         negative_prompt=str(workspace.get("negative_prompt", "") or ""),
+        prompt_template=prompt_template,
     )
     if emitter is not None:
         await emitter.emit("prompt_update", {
@@ -435,6 +440,7 @@ async def enhance_prompt_node(state: AgentState) -> dict:
         similar_cases=similar_cases,
         llm_description=str((state.get("workspace") or {}).get("llm_description", "") or ""),
         custom_description=str((state.get("workspace") or {}).get("custom_description", "") or ""),
+        prompt_template=(state.get("workspace") or {}).get("prompt_template"),
     )
     workspace = _build_prompt_draft(
         design_state=design_state,
@@ -444,6 +450,7 @@ async def enhance_prompt_node(state: AgentState) -> dict:
         user_prompt_hint=str((state.get("workspace") or {}).get("llm_description", "") or ""),
         llm_reply_hint=enhanced.prompt,
         negative_prompt=enhanced.negative_prompt,
+        prompt_template=(state.get("workspace") or {}).get("prompt_template"),
     )
     emitter = get_current_emitter()
     if emitter is not None:
@@ -602,6 +609,7 @@ async def refine_prompt_node(state: AgentState) -> dict:
         user_prompt_hint=str((state.get("workspace") or {}).get("llm_description", "") or ""),
         llm_reply_hint=refined.prompt,
         negative_prompt=refined.negative_prompt,
+        prompt_template=(state.get("workspace") or {}).get("prompt_template"),
     )
     emitter = get_current_emitter()
     if emitter is not None:

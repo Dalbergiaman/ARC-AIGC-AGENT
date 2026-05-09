@@ -81,6 +81,14 @@ export type GenerationPreview = {
   runId?: string;
 };
 
+export type StyleTemplate = {
+  style: string;
+  positive: string[];
+  negative: string[];
+  mood: string;
+  description: string;
+};
+
 export type ToolStatus = {
   tool: string;
   summary: string;
@@ -97,6 +105,7 @@ export type SSEEventPayloadMap = {
     llm_description: string;
     custom_description: string;
     negative_prompt: string;
+    prompt_template: StyleTemplate | null;
     source: "agent_node" | "enhance_prompt" | "refine_prompt";
   };
   error: { code: string; message: string };
@@ -139,6 +148,7 @@ export type SubmitMessagePayload = {
     llm_description: string;
     custom_description: string;
     negative_prompt: string;
+    prompt_template?: StyleTemplate | null;
   };
 };
 
@@ -147,4 +157,5 @@ export type PromptDraft = {
   llm_description: string;
   custom_description: string;
   negative_prompt: string;
+  prompt_template: StyleTemplate | null;
 };

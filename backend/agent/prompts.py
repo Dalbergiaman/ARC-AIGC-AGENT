@@ -8,6 +8,7 @@ def agent_system(
     style_keywords: StyleKeywords | None = None,
     reference_analysis: list[ReferenceImageAnalysis] | None = None,
     similar_cases: list[dict] | None = None,
+    prompt_template: dict | None = None,
 ) -> str:
     ds = design_state
     missing = ds.get("missing_fields", [])
@@ -42,6 +43,16 @@ def agent_system(
             f"  关键词：{kw}"
         )
 
+    template_section = ""
+    if prompt_template:
+        template_section = (
+            f"【用户选择的风格模板：{prompt_template.get('style', '')}】\n"
+            f"  氛围：{prompt_template.get('mood', '')}\n"
+            f"  说明：{prompt_template.get('description', '')}\n"
+            f"  正向关键词：{', '.join(prompt_template.get('positive', [])[:8])}\n"
+            f"  负向关键词：{', '.join(prompt_template.get('negative', [])[:8])}"
+        )
+
     return f"""你是一位专业建筑效果图生成助手，负责通过多轮对话收集设计参数，并在信息充分时触发图像生成。
 
 ## 当前设计状态
@@ -60,6 +71,7 @@ def agent_system(
 {ref_section}
 {cases_section}
 {style_section}
+{template_section}
 
 ## 你的职责
 
@@ -81,6 +93,7 @@ def agent_system(
 - 若 `missing_fields` 非空且用户未明确要求生成 → 追问缺失字段（每次只问最重要的 1～2 个）
 - 只有用户本轮明确要求生成 / 出图 / 渲染 / 重新生成时，才可以输出 `ready_to_generate: true`
 - 若用户要求中断或取消 → 输出 `phase: interrupted`
+- 若用户选择了风格模板，它只是额外上下文；不要用模板覆盖用户已明确提供的字段。若模板与已有草稿重复，保留已有内容，并优先追问最影响生成质量的缺失字段。
 
 ## 输出格式（JSON）
 
@@ -149,6 +162,7 @@ def enhance_prompt_system(
     style_keywords: StyleKeywords | None = None,
     llm_description: str = "",
     custom_description: str = "",
+    prompt_template: dict | None = None,
 ) -> str:
     ds = design_state
 
@@ -186,6 +200,16 @@ def enhance_prompt_system(
             f"用户自定义描述：{custom_description or '无'}"
         )
 
+    template_section = ""
+    if prompt_template:
+        template_section = (
+            f"【用户选择的风格模板：{prompt_template.get('style', '')}】\n"
+            f"{prompt_template.get('description', '')}\n"
+            f"正向关键词：{', '.join(prompt_template.get('positive', []))}\n"
+            f"负向关键词：{', '.join(prompt_template.get('negative', []))}\n"
+            f"氛围：{prompt_template.get('mood', '')}"
+        )
+
     return f"""你是一位专业的建筑效果图提示词工程师，请根据以下设计参数生成高质量的图像生成提示词。
 
 ## 设计参数
@@ -203,6 +227,7 @@ def enhance_prompt_system(
 {cases_section}
 {style_section}
 {description_section}
+{template_section}
 
 ## 输出格式（JSON）
 
@@ -216,6 +241,7 @@ def enhance_prompt_system(
 要求：
 - prompt 必须是英文，从建筑类型和风格开始，依次加入材质、光线、视角、环境
 - 将“模型整理描述”和“用户自定义描述”融合进 prompt，不要只输出关键词
+- 若存在“用户选择的风格模板”，将其作为额外风格上下文融入 prompt，但不要覆盖用户已明确提供的设计参数
 - 融入参考图特征和历史案例的有效表达方式
 - negative_prompt 包含通用质量负向词（blurry, distorted, watermark）和风格冲突词
 - 不要在 prompt 中重复相同概念"""

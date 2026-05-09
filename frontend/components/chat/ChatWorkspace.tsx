@@ -39,6 +39,7 @@ export function ChatWorkspace({ sessionId }: Props) {
   const [sessions, setSessions] = useState<SessionResponse[]>([]);
   const [loadingSession, setLoadingSession] = useState(true);
   const [isResizingWorkspace, setIsResizingWorkspace] = useState(false);
+  const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const {
@@ -72,15 +73,26 @@ export function ChatWorkspace({ sessionId }: Props) {
     toggleWorkspace,
     setWorkspaceWidthRatio,
     getReferenceImages,
+    getPromptDraft,
     promptDraft,
-    setPromptDraft,
+    setSessionPromptDraft,
     updateReferenceImage,
   } = useWorkspaceStore();
 
   const referenceImages = getReferenceImages(sessionId);
 
   useEffect(() => {
-    void useWorkspaceStore.persist.rehydrate();
+    let active = true;
+
+    Promise.resolve(useWorkspaceStore.persist.rehydrate()).then(() => {
+      if (active) {
+        setWorkspaceHydrated(true);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const refreshSessions = useCallback(async () => {
@@ -92,6 +104,10 @@ export function ChatWorkspace({ sessionId }: Props) {
     let active = true;
 
     async function loadSessionData() {
+      if (!workspaceHydrated) {
+        return;
+      }
+
       setLoadingSession(true);
       resetConversation();
       setSessionId(sessionId);
@@ -107,6 +123,7 @@ export function ChatWorkspace({ sessionId }: Props) {
         }
         setMessages(sessionDetail.messages ?? []);
         setSessions(sessionItems);
+        setSessionPromptDraft(sessionId, getPromptDraft(sessionId));
       } catch (error) {
         if (!active) {
           return;
@@ -123,7 +140,17 @@ export function ChatWorkspace({ sessionId }: Props) {
     return () => {
       active = false;
     };
-  }, [refreshSessions, resetConversation, sessionId, setErrorMessage, setMessages, setSessionId]);
+  }, [
+    getPromptDraft,
+    refreshSessions,
+    resetConversation,
+    sessionId,
+    setErrorMessage,
+    setMessages,
+    setSessionId,
+    setSessionPromptDraft,
+    workspaceHydrated,
+  ]);
 
   const sessionTitle =
     sessions.find((session) => session.id === sessionId)?.title?.trim() || "Unnamed Chat";
@@ -178,12 +205,13 @@ export function ChatWorkspace({ sessionId }: Props) {
       upsertGenerationPreview({ taskId, imageUrl, runId });
       setActiveTab("images");
     },
-    onPromptUpdate: (keywords, llmDescription, customDescription, negativePrompt) => {
-      setPromptDraft({
+    onPromptUpdate: (keywords, llmDescription, customDescription, negativePrompt, promptTemplate) => {
+      setSessionPromptDraft(sessionId, {
         keywords,
         llm_description: llmDescription,
         custom_description: customDescription,
         negative_prompt: negativePrompt,
+        prompt_template: promptTemplate ?? useWorkspaceStore.getState().promptTemplateBySession[sessionId] ?? null,
       });
       setActiveTab("prompt");
     },
@@ -226,6 +254,7 @@ export function ChatWorkspace({ sessionId }: Props) {
         llm_description: promptDraft.llm_description,
         custom_description: promptDraft.custom_description,
         negative_prompt: promptDraft.negative_prompt,
+        prompt_template: promptDraft.prompt_template,
       },
     };
 
