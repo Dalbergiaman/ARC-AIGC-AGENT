@@ -48,7 +48,7 @@ export function MessageList({ messages, activeToolStatus, generationPreviews }: 
 
         return (
           <div key={message.id} className="flex justify-end">
-            <div className="max-w-[78%] rounded-2xl bg-black px-4 py-3 text-sm text-white">
+            <div className="max-w-[78%] rounded-2xl border border-black/6 bg-black/[0.04] px-4 py-3 text-sm text-foreground">
               <div className="whitespace-pre-wrap leading-6">{message.content}</div>
             </div>
           </div>
