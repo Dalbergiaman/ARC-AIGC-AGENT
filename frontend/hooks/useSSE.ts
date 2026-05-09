@@ -12,9 +12,11 @@ type Handlers = {
   onGenerationStart?: (taskId: string, runId?: string) => void;
   onGenerationDone?: (taskId: string, imageUrl: string, runId?: string) => void;
   onPromptUpdate?: (
-    prompt: string,
+    keywords: Record<string, string>,
+    llmDescription: string,
+    customDescription: string,
     negativePrompt: string,
-    source: "enhance_prompt" | "refine_prompt",
+    source: "agent_node" | "enhance_prompt" | "refine_prompt",
   ) => void;
   onError?: (code: string, message: string) => void;
   onDone?: (finishReason: "stop" | "max_retries" | "interrupted") => void;
@@ -118,11 +120,19 @@ export function useSSE({
       }
       if (
         eventType === "prompt_update" &&
-        typeof data.prompt === "string" &&
+        data.keywords &&
+        typeof data.llm_description === "string" &&
+        typeof data.custom_description === "string" &&
         typeof data.negative_prompt === "string" &&
-        (data.source === "enhance_prompt" || data.source === "refine_prompt")
+        (data.source === "agent_node" || data.source === "enhance_prompt" || data.source === "refine_prompt")
       ) {
-        handlers.onPromptUpdate?.(data.prompt, data.negative_prompt, data.source);
+        handlers.onPromptUpdate?.(
+          data.keywords as Record<string, string>,
+          data.llm_description,
+          data.custom_description,
+          data.negative_prompt,
+          data.source,
+        );
       }
       if (eventType === "error" && typeof data.code === "string" && typeof data.message === "string") {
         handlers.onError?.(data.code, data.message);

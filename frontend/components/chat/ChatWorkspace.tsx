@@ -73,9 +73,7 @@ export function ChatWorkspace({ sessionId }: Props) {
     setWorkspaceWidthRatio,
     getReferenceImages,
     promptDraft,
-    negativePromptDraft,
     setPromptDraft,
-    setNegativePromptDraft,
     updateReferenceImage,
   } = useWorkspaceStore();
 
@@ -180,9 +178,13 @@ export function ChatWorkspace({ sessionId }: Props) {
       upsertGenerationPreview({ taskId, imageUrl, runId });
       setActiveTab("images");
     },
-    onPromptUpdate: (prompt, negativePrompt) => {
-      setPromptDraft(prompt);
-      setNegativePromptDraft(negativePrompt);
+    onPromptUpdate: (keywords, llmDescription, customDescription, negativePrompt) => {
+      setPromptDraft({
+        keywords,
+        llm_description: llmDescription,
+        custom_description: customDescription,
+        negative_prompt: negativePrompt,
+      });
       setActiveTab("prompt");
     },
     onError: (_code, message) => {
@@ -219,12 +221,12 @@ export function ChatWorkspace({ sessionId }: Props) {
           note: img.note ?? "",
         })),
       }),
-      ...((promptDraft || negativePromptDraft) && {
-        workspace: {
-          prompt: promptDraft,
-          negative_prompt: negativePromptDraft,
-        },
-      }),
+      workspace: {
+        keywords: promptDraft.keywords,
+        llm_description: promptDraft.llm_description,
+        custom_description: promptDraft.custom_description,
+        negative_prompt: promptDraft.negative_prompt,
+      },
     };
 
     try {

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import type { ReferenceImageDraft, WorkspaceTab } from "@/lib/types";
+import type { PromptDraft, ReferenceImageDraft, WorkspaceTab } from "@/lib/types";
 
 const MIN_WORKSPACE_RATIO = 0.22;
 const MAX_WORKSPACE_RATIO = 0.65;
@@ -14,8 +14,7 @@ type WorkspaceStore = {
   workspaceCollapsed: boolean;
   workspaceWidthRatio: number;
   // Prompt drafts (not persisted — synced from Agent in E-3)
-  promptDraft: string;
-  negativePromptDraft: string;
+  promptDraft: PromptDraft;
   // Reference images keyed by sessionId (persisted to localStorage)
   referenceImagesBySession: Record<string, ReferenceImageDraft[]>;
   // Layout actions
@@ -26,8 +25,8 @@ type WorkspaceStore = {
   toggleWorkspace: () => void;
   setWorkspaceWidthRatio: (ratio: number) => void;
   // Prompt actions
-  setPromptDraft: (prompt: string) => void;
-  setNegativePromptDraft: (prompt: string) => void;
+  setPromptDraft: (draft: Partial<PromptDraft>) => void;
+  setPromptDraftField: <K extends keyof PromptDraft>(field: K, value: PromptDraft[K]) => void;
   // Reference image actions (all scoped to a sessionId)
   getReferenceImages: (sessionId: string) => ReferenceImageDraft[];
   addReferenceImage: (sessionId: string, img: ReferenceImageDraft) => void;
@@ -47,8 +46,12 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
       activeTab: "prompt",
       workspaceCollapsed: false,
       workspaceWidthRatio: DEFAULT_WORKSPACE_RATIO,
-      promptDraft: "",
-      negativePromptDraft: "",
+      promptDraft: {
+        keywords: {},
+        llm_description: "",
+        custom_description: "",
+        negative_prompt: "",
+      },
       referenceImagesBySession: {},
 
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
@@ -59,8 +62,24 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
       setWorkspaceWidthRatio: (workspaceWidthRatio) =>
         set({ workspaceWidthRatio: clampWorkspaceWidthRatio(workspaceWidthRatio) }),
 
-      setPromptDraft: (promptDraft) => set({ promptDraft }),
-      setNegativePromptDraft: (negativePromptDraft) => set({ negativePromptDraft }),
+      setPromptDraft: (draft) =>
+        set((state) => ({
+          promptDraft: {
+            ...state.promptDraft,
+            ...draft,
+            keywords: {
+              ...state.promptDraft.keywords,
+              ...(draft.keywords ?? {}),
+            },
+          },
+        })),
+      setPromptDraftField: (field, value) =>
+        set((state) => ({
+          promptDraft: {
+            ...state.promptDraft,
+            [field]: value,
+          },
+        })),
 
       getReferenceImages: (sessionId) =>
         get().referenceImagesBySession[sessionId] ?? [],

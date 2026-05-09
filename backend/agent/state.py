@@ -37,6 +37,13 @@ class ReferenceImageAnalysis(TypedDict, total=False):
     intent_note: str       # optional user note about the intent
 
 
+class PromptDraft(TypedDict, total=False):
+    keywords: dict[str, str]
+    llm_description: str
+    custom_description: str
+    negative_prompt: str
+
+
 class GenerationResult(TypedDict, total=False):
     image_url: str
     provider: str
@@ -72,6 +79,7 @@ class ImageRecord(TypedDict):
 class AgentState(MessagesState):
     design_state: DesignState
     reference_images: list[ReferenceImageAnalysis]
+    workspace: PromptDraft | None
     ready_to_generate: bool
     generation_results: list[GenerationResult]
     retry_count: int
@@ -107,6 +115,12 @@ def default_agent_state() -> dict:
             "completeness": 0.0,
         },
         "reference_images": [],
+        "workspace": {
+            "keywords": {},
+            "llm_description": "",
+            "custom_description": "",
+            "negative_prompt": "",
+        },
         "ready_to_generate": False,
         "generation_results": [],
         "retry_count": 0,

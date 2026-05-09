@@ -12,7 +12,9 @@ class FakeGraph:
             await emitter.emit(
                 "prompt_update",
                 {
-                    "prompt": "modern villa, clean lines",
+                    "keywords": {"style": "modern"},
+                    "llm_description": "modern villa with clean lines",
+                    "custom_description": "",
                     "negative_prompt": "blurry",
                     "source": "enhance_prompt",
                 },

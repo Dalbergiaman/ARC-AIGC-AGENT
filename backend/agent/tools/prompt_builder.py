@@ -41,6 +41,8 @@ async def enhance_prompt(
     design_state: DesignState,
     reference_analysis: list[ReferenceImageAnalysis] | None = None,
     similar_cases: list[dict] | None = None,
+    llm_description: str = "",
+    custom_description: str = "",
 ) -> EnhancedPrompt:
     """Build image generation prompt from DesignState, reference images, and similar cases.
 
@@ -59,6 +61,8 @@ async def enhance_prompt(
             reference_analysis=reference_analysis,
             similar_cases=similar_cases,
             style_keywords=style_keywords,
+            llm_description=llm_description,
+            custom_description=custom_description,
         )),
         HumanMessage(content="请根据以上设计参数生成提示词。"),
     ]

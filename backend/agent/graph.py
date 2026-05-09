@@ -12,7 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from agent.prompts import agent_system
-from agent.state import AgentState, EvaluationResult, default_agent_state
+from agent.state import AgentState, EvaluationResult, PromptDraft, default_agent_state
 from agent.state_utils import (
     reset_generation_run,
     signature_changed,
@@ -48,6 +48,97 @@ _GENERATION_INTENT_RE = re.compile(
 )
 
 
+def _prompt_keywords(design_state: dict, style_keywords: dict | None = None) -> dict[str, str]:
+    keywords: dict[str, str] = {}
+    mapping = {
+        "building_type": "building_type",
+        "style": "style",
+        "facade_material": "facade_material",
+        "lighting": "lighting",
+        "viewpoint": "viewpoint",
+        "season": "season",
+        "surroundings": "surroundings",
+        "color_palette": "color_palette",
+        "special_requirements": "special_requirements",
+    }
+    for key, target in mapping.items():
+        value = design_state.get(key)
+        if value:
+            keywords[target] = str(value)
+    if style_keywords and style_keywords.get("found"):
+        pos = style_keywords.get("positive", [])
+        neg = style_keywords.get("negative", [])
+        if pos:
+            keywords["style_positive"] = ", ".join(pos)
+        if neg:
+            keywords["style_negative"] = ", ".join(neg)
+    return keywords
+
+
+def _compose_llm_description(
+    design_state: dict,
+    reference_images: list[dict],
+    similar_cases: list[dict],
+    user_prompt_hint: str = "",
+    llm_reply_hint: str = "",
+) -> str:
+    parts: list[str] = []
+    building_type = design_state.get("building_type", "")
+    style = design_state.get("style", "")
+    facade_material = design_state.get("facade_material", "")
+    lighting = design_state.get("lighting", "")
+    viewpoint = design_state.get("viewpoint", "")
+    surroundings = design_state.get("surroundings", "")
+    color_palette = design_state.get("color_palette", "")
+    special_requirements = design_state.get("special_requirements", "")
+
+    if building_type or style:
+        parts.append("画面主体清晰、结构完整，强调建筑类型与整体风格的一致性。")
+    if facade_material or color_palette:
+        parts.append("外立面材质和色彩需要写得更具体，避免过于笼统。")
+    if lighting or viewpoint:
+        parts.append("补充明确的光线方向、时间感和观看视角，让画面更有摄影感。")
+    if surroundings:
+        parts.append("把建筑与周边环境的关系交代出来，避免主体悬浮。")
+    if reference_images:
+        parts.append("参考图中的构图、体块关系和视觉重心需要被吸收进描述里。")
+    if similar_cases:
+        parts.append("描述需要参考历史案例的成熟表达，但保持当前项目的独立性。")
+    if special_requirements:
+        parts.append(f"特别要求是：{special_requirements}。")
+    if user_prompt_hint:
+        parts.append(user_prompt_hint.strip())
+    if llm_reply_hint:
+        parts.append(llm_reply_hint.strip())
+    if not parts:
+        parts.append("画面描述保持自然完整，尽量补足人物语言中的细节表达。")
+    return " ".join(parts)
+
+
+def _build_prompt_draft(
+    design_state: dict,
+    reference_images: list[dict],
+    similar_cases: list[dict],
+    custom_description: str = "",
+    user_prompt_hint: str = "",
+    llm_reply_hint: str = "",
+    style_keywords: dict | None = None,
+    negative_prompt: str = "",
+) -> PromptDraft:
+    return {
+        "keywords": _prompt_keywords(design_state, style_keywords),
+        "llm_description": _compose_llm_description(
+            design_state=design_state,
+            reference_images=reference_images,
+            similar_cases=similar_cases,
+            user_prompt_hint=user_prompt_hint,
+            llm_reply_hint=llm_reply_hint,
+        ),
+        "custom_description": custom_description or "",
+        "negative_prompt": negative_prompt or "",
+    }
+
+
 def _extract_image_urls(messages: list) -> list[str]:
     """Extract image URLs from the latest human message."""
     for msg in reversed(messages):
@@ -62,7 +153,7 @@ def _latest_human_text(messages: list) -> str:
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
             content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            return content.split("\n[用户草稿 prompt:", 1)[0]
+            return content.split("\n[用户草稿 prompt:", 1)[0].split("\n[用户草稿 workspace:", 1)[0]
     return ""
 
 
@@ -108,6 +199,9 @@ async def agent_node(state: AgentState) -> dict:
     messages = list(state.get("messages") or [])
     explicit_generation_intent = has_explicit_generation_intent(messages)
     style_keywords = None
+    workspace = dict(state.get("workspace") or {})
+    custom_description = str(workspace.get("custom_description", "") or "")
+    prompt_hint = str(workspace.get("llm_description", "") or "")
     updates: dict = {}
     update_current_span(
         input={
@@ -233,6 +327,22 @@ async def agent_node(state: AgentState) -> dict:
         design_state["field_confidence"] = existing
 
     design_state = update_completeness(design_state)
+    llm_description = str(data.get("llm_description", "") or "")
+    prompt_draft = _build_prompt_draft(
+        design_state=design_state,
+        reference_images=reference_images,
+        similar_cases=similar_cases,
+        custom_description=custom_description,
+        user_prompt_hint=prompt_hint,
+        llm_reply_hint=llm_description,
+        style_keywords=style_keywords,
+        negative_prompt=str(workspace.get("negative_prompt", "") or ""),
+    )
+    if emitter is not None:
+        await emitter.emit("prompt_update", {
+            **prompt_draft,
+            "source": "agent_node",
+        })
 
     llm_ready = bool(data.get("ready_to_generate", False))
     ready, phase = resolve_generation_gate(
@@ -242,6 +352,7 @@ async def agent_node(state: AgentState) -> dict:
     result: dict = {
         **updates,
         "design_state": design_state,
+        "workspace": prompt_draft,
         "messages": [] if emitter is not None else [AIMessage(content=raw)] if raw else [],
         "phase": phase,
         "ready_to_generate": ready,
@@ -254,6 +365,7 @@ async def agent_node(state: AgentState) -> dict:
         output={
             "parse_ok": True,
             "reply": message_preview(data.get("reply", "")),
+            "llm_description": message_preview(llm_description),
             "design_state": design_state,
             "llm_ready_to_generate": llm_ready,
             "explicit_generation_intent": explicit_generation_intent,
@@ -321,12 +433,24 @@ async def enhance_prompt_node(state: AgentState) -> dict:
         design_state=design_state,
         reference_analysis=reference_images,
         similar_cases=similar_cases,
+        llm_description=str((state.get("workspace") or {}).get("llm_description", "") or ""),
+        custom_description=str((state.get("workspace") or {}).get("custom_description", "") or ""),
+    )
+    workspace = _build_prompt_draft(
+        design_state=design_state,
+        reference_images=reference_images,
+        similar_cases=similar_cases,
+        custom_description=str((state.get("workspace") or {}).get("custom_description", "") or ""),
+        user_prompt_hint=str((state.get("workspace") or {}).get("llm_description", "") or ""),
+        llm_reply_hint=enhanced.prompt,
+        negative_prompt=enhanced.negative_prompt,
     )
     emitter = get_current_emitter()
     if emitter is not None:
+        workspace["llm_description"] = enhanced.prompt
+        workspace["negative_prompt"] = enhanced.negative_prompt
         await emitter.emit("prompt_update", {
-            "prompt": enhanced.prompt,
-            "negative_prompt": enhanced.negative_prompt,
+            **workspace,
             "source": "enhance_prompt",
         })
 
@@ -341,6 +465,7 @@ async def enhance_prompt_node(state: AgentState) -> dict:
     return {
         "phase": "generating",
         "_enhanced_prompt": enhanced,  # passed to generate_image_node via state
+        "workspace": workspace,
     }
 
 
@@ -469,11 +594,21 @@ async def refine_prompt_node(state: AgentState) -> dict:
         original_prompt=enhanced_prompt,
         evaluation=evaluation,
     )
+    workspace = _build_prompt_draft(
+        design_state=dict(state.get("design_state") or {}),
+        reference_images=list(state.get("reference_images") or []),
+        similar_cases=list(state.get("similar_cases") or []),
+        custom_description=str((state.get("workspace") or {}).get("custom_description", "") or ""),
+        user_prompt_hint=str((state.get("workspace") or {}).get("llm_description", "") or ""),
+        llm_reply_hint=refined.prompt,
+        negative_prompt=refined.negative_prompt,
+    )
     emitter = get_current_emitter()
     if emitter is not None:
+        workspace["llm_description"] = refined.prompt
+        workspace["negative_prompt"] = refined.negative_prompt
         await emitter.emit("prompt_update", {
-            "prompt": refined.prompt,
-            "negative_prompt": refined.negative_prompt,
+            **workspace,
             "source": "refine_prompt",
         })
 
@@ -481,6 +616,7 @@ async def refine_prompt_node(state: AgentState) -> dict:
     return {
         "_enhanced_prompt": refined,
         "retry_count": state.get("retry_count", 0) + 1,
+        "workspace": workspace,
     }
 
 

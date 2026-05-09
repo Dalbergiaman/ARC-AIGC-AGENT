@@ -93,9 +93,11 @@ export type SSEEventPayloadMap = {
   generation_start: { task_id: string; run_id?: string };
   generation_done: { task_id: string; image_url: string; run_id?: string };
   prompt_update: {
-    prompt: string;
+    keywords: Record<string, string>;
+    llm_description: string;
+    custom_description: string;
     negative_prompt: string;
-    source: "enhance_prompt" | "refine_prompt";
+    source: "agent_node" | "enhance_prompt" | "refine_prompt";
   };
   error: { code: string; message: string };
   done: { finish_reason: "stop" | "max_retries" | "interrupted" };
@@ -133,7 +135,16 @@ export type SubmitMessagePayload = {
     note?: string;
   }>;
   workspace?: {
-    prompt: string;
+    keywords?: Record<string, string>;
+    llm_description: string;
+    custom_description: string;
     negative_prompt: string;
   };
+};
+
+export type PromptDraft = {
+  keywords: Record<string, string>;
+  llm_description: string;
+  custom_description: string;
+  negative_prompt: string;
 };

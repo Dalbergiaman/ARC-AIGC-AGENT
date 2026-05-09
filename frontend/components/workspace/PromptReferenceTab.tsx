@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef } from "react";
-import { X, Upload, Loader2 } from "lucide-react";
+import { useMemo, useRef } from "react";
+import { Loader2, Upload, X } from "lucide-react";
 
 import { getApiBaseUrl } from "@/lib/api";
 import { useWorkspaceStore } from "@/store/workspaceStore";
@@ -27,16 +27,19 @@ export function PromptReferenceTab({ sessionId }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const {
     promptDraft,
-    negativePromptDraft,
     getReferenceImages,
+    setPromptDraftField,
     setPromptDraft,
-    setNegativePromptDraft,
     addReferenceImage,
     updateReferenceImage,
     removeReferenceImage,
   } = useWorkspaceStore();
 
   const referenceImages = getReferenceImages(sessionId);
+  const prettyDraft = useMemo(
+    () => JSON.stringify(promptDraft, null, 2),
+    [promptDraft],
+  );
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
@@ -74,50 +77,67 @@ export function PromptReferenceTab({ sessionId }: Props) {
 
   return (
     <div className="flex flex-col gap-5 px-4 py-4">
-      {/* Prompt section */}
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-foreground">正向提示词</span>
-          {promptDraft && (
-            <button
-              type="button"
-              onClick={() => setPromptDraft("")}
-              className="text-xs text-muted-foreground hover:text-foreground"
-            >
-              清空
-            </button>
-          )}
+          <span className="text-xs font-medium text-foreground">Prompt 草稿 JSON</span>
+          <button
+            type="button"
+            onClick={() => setPromptDraft({
+              keywords: {},
+              llm_description: "",
+              custom_description: "",
+              negative_prompt: "",
+            })}
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            重置
+          </button>
+        </div>
+        <pre className="max-h-72 overflow-auto rounded-xl border border-black/8 bg-white px-3 py-2.5 text-xs leading-5 text-foreground whitespace-pre-wrap break-words">
+          {prettyDraft}
+        </pre>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-foreground">custom_description</span>
+          <span className="text-[11px] text-muted-foreground">用户可直接编辑的自由描述</span>
         </div>
         <textarea
-          value={promptDraft}
-          onChange={(e) => setPromptDraft(e.target.value)}
-          placeholder="Agent 生成的提示词会显示在这里，你也可以手动编辑"
-          rows={4}
+          value={promptDraft.custom_description}
+          onChange={(e) => setPromptDraftField("custom_description", e.target.value)}
+          placeholder="在这里补充你希望模型严格遵守的画面描述"
+          rows={5}
           className="w-full resize-none rounded-xl border border-black/8 bg-white px-3 py-2.5 text-sm leading-5 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-black/20"
         />
+      </div>
 
+      <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-foreground">负向提示词</span>
-          {negativePromptDraft && (
-            <button
-              type="button"
-              onClick={() => setNegativePromptDraft("")}
-              className="text-xs text-muted-foreground hover:text-foreground"
-            >
-              清空
-            </button>
-          )}
+          <span className="text-xs font-medium text-foreground">llm_description</span>
+          <span className="text-[11px] text-muted-foreground">由 Agent 多轮对话整理</span>
         </div>
         <textarea
-          value={negativePromptDraft}
-          onChange={(e) => setNegativePromptDraft(e.target.value)}
+          value={promptDraft.llm_description}
+          readOnly
+          rows={4}
+          className="w-full resize-none rounded-xl border border-black/8 bg-black/[0.02] px-3 py-2.5 text-sm leading-5 text-foreground focus:outline-none"
+        />
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-foreground">负向提示词</span>
+        </div>
+        <textarea
+          value={promptDraft.negative_prompt}
+          onChange={(e) => setPromptDraftField("negative_prompt", e.target.value)}
           placeholder="不希望出现的元素"
           rows={2}
           className="w-full resize-none rounded-xl border border-black/8 bg-white px-3 py-2.5 text-sm leading-5 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-black/20"
         />
       </div>
 
-      {/* Reference images section */}
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-foreground">参考图</span>
@@ -150,7 +170,6 @@ export function PromptReferenceTab({ sessionId }: Props) {
                 key={img.fileId}
                 className="flex gap-3 rounded-xl border border-black/8 bg-white p-3"
               >
-                {/* Thumbnail */}
                 <div className="relative size-16 shrink-0 overflow-hidden rounded-lg bg-black/[0.04]">
                   {img.uploading ? (
                     <div className="flex size-full items-center justify-center">
@@ -175,7 +194,6 @@ export function PromptReferenceTab({ sessionId }: Props) {
                   )}
                 </div>
 
-                {/* Controls */}
                 <div className="flex min-w-0 flex-1 flex-col gap-2">
                   <select
                     value={img.intent}
@@ -203,7 +221,6 @@ export function PromptReferenceTab({ sessionId }: Props) {
                   />
                 </div>
 
-                {/* Remove */}
                 <button
                   type="button"
                   onClick={() => removeReferenceImage(sessionId, img.fileId)}

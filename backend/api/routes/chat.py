@@ -18,7 +18,7 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -92,7 +92,9 @@ class ReferenceImagePayload(BaseModel):
 
 
 class WorkspacePayload(BaseModel):
-    prompt: str = ""
+    keywords: dict[str, str] = Field(default_factory=dict)
+    llm_description: str = ""
+    custom_description: str = ""
     negative_prompt: str = ""
 
 
@@ -135,7 +137,14 @@ async def submit_message(
         if body.reference_images:
             ref_key = f"ref_images:{session_id}:{stream_id}"
             await r.set(ref_key, json.dumps([img.model_dump() for img in body.reference_images]), ex=_RUN_TTL)
-        if body.workspace and body.workspace.prompt:
+        if body.workspace and any(
+            [
+                body.workspace.keywords,
+                body.workspace.llm_description,
+                body.workspace.custom_description,
+                body.workspace.negative_prompt,
+            ]
+        ):
             ws_key = f"workspace:{session_id}:{stream_id}"
             await r.set(ws_key, json.dumps(body.workspace.model_dump()), ex=_RUN_TTL)
     finally:
@@ -253,13 +262,11 @@ async def _generate_sse(
         # Append workspace prompt draft to the last HumanMessage so Agent can see it
         if workspace_raw and lc_messages:
             ws = json.loads(workspace_raw)
-            prompt_draft = ws.get("prompt", "").strip()
-            if prompt_draft:
-                last = lc_messages[-1]
-                if isinstance(last, HumanMessage):
-                    lc_messages[-1] = HumanMessage(
-                        content=f"{last.content}\n[用户草稿 prompt: {prompt_draft}]"
-                    )
+            last = lc_messages[-1]
+            if isinstance(last, HumanMessage):
+                lc_messages[-1] = HumanMessage(
+                    content=f"{last.content}\n[用户草稿 workspace: {json.dumps(ws, ensure_ascii=False)}]"
+                )
 
         input_state: dict = {
             "messages": lc_messages,
@@ -268,6 +275,8 @@ async def _generate_sse(
         }
         if pending_ref_images:
             input_state["reference_images"] = pending_ref_images
+        if workspace_raw:
+            input_state["workspace"] = json.loads(workspace_raw)
 
         config = {
             "configurable": {"thread_id": str(session_id)},

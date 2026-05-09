@@ -102,12 +102,14 @@ def agent_system(
   }},
   "ready_to_generate": false,
   "phase": "collecting",
+  "llm_description": "把用户本轮和历史上下文里的非关键词描述整理成一段适合图像生成的画面描述；没有可整理内容时填空字符串",
   "reply": "向用户说的话（中文，自然对话风格）"
 }}
 ```
 
 规则：
 - `design_state_updates` 只填本轮有变化的字段，未变化的字段留空字符串
+- `llm_description` 不是关键词列表，而是一段自然语言画面描述；优先吸收用户关于氛围、构图、空间感、细节感的表达
 - `reply` 是展示给用户的回复，不要暴露 JSON 结构或技术细节, 不管用户提出什么问题，你都必须为reply提供一个有用的回答，不能直接说“请提供更多信息”或者“我不清楚”甚至直接是空字段，而是要引导用户提供缺失的信息，例如“这个设计是面向住宅还是商业用途呢？”或者“您更倾向于现代风格还是传统风格呢？”等引导性问题。
 - 若 `ready_to_generate` 为 true，`phase` 改为 `generating`；不要因为信息完整度高而自行改为生成
 - 若用户中断，`phase` 改为 `interrupted`，`ready_to_generate` 为 false"""
@@ -145,6 +147,8 @@ def enhance_prompt_system(
     reference_analysis: list[ReferenceImageAnalysis] | None = None,
     similar_cases: list[dict] | None = None,
     style_keywords: StyleKeywords | None = None,
+    llm_description: str = "",
+    custom_description: str = "",
 ) -> str:
     ds = design_state
 
@@ -174,6 +178,14 @@ def enhance_prompt_system(
             f"负向关键词：{neg_kw}"
         )
 
+    description_section = ""
+    if llm_description or custom_description:
+        description_section = (
+            "【描述性提示词】\n"
+            f"模型整理描述：{llm_description or '无'}\n"
+            f"用户自定义描述：{custom_description or '无'}"
+        )
+
     return f"""你是一位专业的建筑效果图提示词工程师，请根据以下设计参数生成高质量的图像生成提示词。
 
 ## 设计参数
@@ -190,6 +202,7 @@ def enhance_prompt_system(
 {ref_section}
 {cases_section}
 {style_section}
+{description_section}
 
 ## 输出格式（JSON）
 
@@ -202,6 +215,7 @@ def enhance_prompt_system(
 
 要求：
 - prompt 必须是英文，从建筑类型和风格开始，依次加入材质、光线、视角、环境
+- 将“模型整理描述”和“用户自定义描述”融合进 prompt，不要只输出关键词
 - 融入参考图特征和历史案例的有效表达方式
 - negative_prompt 包含通用质量负向词（blurry, distorted, watermark）和风格冲突词
 - 不要在 prompt 中重复相同概念"""
