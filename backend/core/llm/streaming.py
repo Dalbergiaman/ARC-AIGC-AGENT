@@ -236,7 +236,12 @@ async def stream_agent_events(
                     yield _sse(item["type"], item["data"], event_id)
 
     finally:
-        task.cancel()
+        if not task.done():
+            # Do not cancel graph execution only because the SSE consumer was
+            # closed. User-initiated interruption is handled by Redis cancel
+            # flags inside generate_image; cancelling this task here can mark an
+            # otherwise healthy image generation span as an error in Langfuse.
+            task.add_done_callback(lambda done_task: done_task.exception() if not done_task.cancelled() else None)
         _EMITTER_VAR.reset(token)
 
     # Final done event

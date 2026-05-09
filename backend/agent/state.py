@@ -44,6 +44,13 @@ class ControlImage(TypedDict, total=False):
     sent: bool
 
 
+class AnnotatedImage(TypedDict, total=False):
+    file_id: str
+    image_url: str
+    note: str
+    sent: bool
+
+
 class PromptDraft(TypedDict, total=False):
     keywords: dict[str, str]
     llm_description: str
@@ -89,6 +96,7 @@ class AgentState(MessagesState):
     design_state: DesignState
     reference_images: list[ReferenceImageAnalysis]
     control_image: ControlImage | None
+    annotated_image: AnnotatedImage | None
     workspace: PromptDraft | None
     ready_to_generate: bool
     generation_results: list[GenerationResult]
@@ -104,6 +112,7 @@ class AgentState(MessagesState):
     # Internal fields passed between generation sub-flow nodes (not persisted long-term)
     _enhanced_prompt: dict | None
     _current_gen_result: GenerationResult | None
+    _current_generation_persist: dict | None
 
 
 def default_agent_state() -> dict:
@@ -126,6 +135,7 @@ def default_agent_state() -> dict:
         },
         "reference_images": [],
         "control_image": None,
+        "annotated_image": None,
         "workspace": {
             "keywords": {},
             "llm_description": "",
@@ -146,4 +156,5 @@ def default_agent_state() -> dict:
         "run_id": "",
         "_enhanced_prompt": None,
         "_current_gen_result": None,
+        "_current_generation_persist": None,
     }

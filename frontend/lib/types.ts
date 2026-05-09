@@ -80,10 +80,14 @@ export type SubmitMessageResponse = {
 
 export type GenerationPreview = {
   taskId: string;
-  imageUrl: string;
+  imageUrl?: string | null;
   runId?: string;
   score?: number | null;
   provider?: string | null;
+  status?: string;
+  prompt?: string;
+  negativePrompt?: string | null;
+  rawResponse?: Record<string, unknown> | null;
 };
 
 export type StyleTemplate = {
@@ -150,6 +154,15 @@ export type ControlImageDraft = {
   sent?: boolean;
 };
 
+export type AnnotatedImageDraft = {
+  fileId: string;
+  url: string;
+  note?: string;
+  uploading?: boolean;
+  error?: string;
+  sent?: boolean;
+};
+
 export type SessionReferenceImage = {
   id: string;
   file_id: string;
@@ -195,6 +208,11 @@ export type SubmitMessagePayload = {
     note?: string;
   }>;
   control_image?: {
+    file_id: string;
+    url: string;
+    note?: string;
+  } | null;
+  annotated_image?: {
     file_id: string;
     url: string;
     note?: string;

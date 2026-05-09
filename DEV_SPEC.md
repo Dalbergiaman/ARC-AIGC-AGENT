@@ -178,6 +178,7 @@ class AgentState(MessagesState):  # MessagesState 是带 add_messages reducer �
     design_state: DesignState            # 结构化设计参数（工作记忆核心）
     reference_images: list[ReferenceImageAnalysis]  # 参考图分析结果
     control_image: ControlImage | None   # 图生图结构底图（单张），用于约束建筑体量/透视/尺度/空间关系
+    annotated_image: AnnotatedImage | None  # 批注后的上一版效果图，用于下一轮图生图调整
     ready_to_generate: bool              # 控制流：是否触发生成
     generation_results: list[GenerationResult]      # 历史生成结果
     retry_count: int                     # 当前生成任务的重试次数（上限 3，每次新生成意图重置）
@@ -211,6 +212,12 @@ class ReferenceImageAnalysis(TypedDict, total=False):
     intent_note: str       # 用户对参考意图的补充说明
 
 class ControlImage(TypedDict, total=False):
+    file_id: str
+    image_url: str
+    note: str
+    sent: bool
+
+class AnnotatedImage(TypedDict, total=False):
     file_id: str
     image_url: str
     note: str
@@ -496,6 +503,7 @@ class GenerationRequest:
     negative_prompt: str | None = None
     ref_image_url: str | None = None       # 兼容旧字段；新代码写入 control_image_url
     control_image_url: str | None = None   # 单张图生图结构底图
+    input_image_urls: list[str] | None = None  # 图生图输入顺序：control_image 在前，annotated_image 在后
     width: int = 1344
     height: int = 768
     steps: int = 30
@@ -1514,12 +1522,12 @@ backend/tests/
 
 **E-4 生成图片工作区、批注与下载**
 
-- [ ] 编写 `GeneratedImagesTab.tsx`：监听 `generation_done`，展示生成图片列表、大图预览、评分、重试次数
-- [ ] 中间对话区展示生成图缩略图，右侧生成图标签展示完整操作区
-- [ ] 实现下载按钮；跨域下载失败时记录问题，后续补后端代理下载接口
-- [ ] 编写 `ImageAnnotationCanvas.tsx`：画笔、撤销、清空、导出批注图
-- [ ] 批注图首版作为新参考图走 `POST /api/upload`，再随下一条消息发送给 Agent；独立 `POST /api/annotations` 可后续补
-- [ ] 生成完成后展示"存入图库"按钮；E-4 先做 UI 占位/禁用状态，待 D 阶段完成 `image-rag-mcp` 与 `POST /api/library/store` 后再接入真实调用。真实接入时后端直接调用 MCP `store_generated_image`，不经过 Agent
+- [x] 编写 `GeneratedImagesTab.tsx`：监听 `generation_done`，展示生成图片列表、大图预览、评分、重试次数
+- [x] 中间对话区展示生成图缩略图，右侧生成图标签展示完整操作区
+- [x] 实现下载按钮；跨域下载失败时记录问题，后续补后端代理下载接口
+- [x] 编写 `ImageAnnotationCanvas.tsx`：画笔、撤销、清空、导出批注图
+- [x] 批注图首版复用 `POST /api/upload`，作为 `annotated_image` 独立于普通 `reference_images` 随下一条消息发送给 Agent；独立 `POST /api/annotations` 可后续补
+- [x] 生成完成后展示"存入图库"按钮；E-4 先做 UI 占位/禁用状态，待 D 阶段完成 `image-rag-mcp` 与 `POST /api/library/store` 后再接入真实调用。真实接入时后端直接调用 MCP `store_generated_image`，不经过 Agent
 
 **E-5 全流程联调**
 
@@ -1532,18 +1540,21 @@ backend/tests/
 
 ## 当前状态
 
-**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 临时持久化；E-3 已完成 prompt 实时同步与风格模板独立注入，参数滑块因缺少跨平台通用 API 字段暂缓；E-3.5 已完成会话工作区服务端持久化并通过跨浏览器恢复验证；当前进入 E-4 生成图片工作区。
+**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 临时持久化；E-3 已完成 prompt 实时同步与风格模板独立注入，参数滑块因缺少跨平台通用 API 字段暂缓；E-3.5 已完成会话工作区服务端持久化并通过跨浏览器恢复验证；E-4 已完成生成图片工作区、下载、批注图上传与批注图生图链路；当前进入 E-5 全流程联调。
 
 **建议执行顺序（2026-05-08 调整）**：
 1. ~~C-6.1~~、~~C-8~~、~~E-1~~：已完成。
 2. ~~E-2~~：已完成参考图列表按 sessionId 存 localStorage，刷新/切换 session 后恢复。
 3. ~~E-3~~：已完成 `prompt_update` SSE、结构化 prompt 草稿与风格模板 `prompt_template` 注入；参数滑块暂缓。
 4. ~~E-3.5~~：已完成将 prompt 草稿、参考图会话状态、生成任务结果从 `localStorage` / 前端内存迁移到 PostgreSQL；这是 E-4 前置，避免生成图工作区做完后因刷新恢复能力返工。
-5. E-4 ~ E-5：生成图批注下载、存入图库、全流程联调。
-6. D-1 ~ D-4：image-rag-mcp 图库、Milvus/PG 存储与检索，替换 `search_similar_cases` stub。
-7. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
+5. ~~E-4~~：已完成生成图批注下载、禁用图库占位、批注图作为 `annotated_image` 回传；多图 provider 请求按 control image、annotated image 顺序构造。
+6. E-5：全流程联调。
+7. D-1 ~ D-4：image-rag-mcp 图库、Milvus/PG 存储与检索，替换 `search_similar_cases` stub。
+8. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-09：修复 E-4 联调时 Langfuse `Context error: No active span` 与 `tool:generate_image` 被标记 error 的问题。根因是 `agent:turn` observation 只包住了初始化元数据更新，进入异步 LangGraph / SSE 事件循环前已经退出，后续节点和工具没有 active span；同时 SSE consumer 关闭时 `stream_agent_events` 的 `finally` 会直接取消内部 graph task，可能打断正在轮询 Celery 的 `generate_image`，并引发 asyncpg 连接关闭时的 `CancelledError` 噪音。现调整为 `agent:turn` observation 覆盖整个 `stream_agent_events` 消费过程；普通 EventSource 断连不再直接取消 LangGraph 任务，真正用户中断仍通过 Redis cancel flag（新消息设置 `cancel:{session_id}:{run_id}`）生效。
+- 2026-05-09：E-4 完成生成图片工作区与批注图生图链路。批注导出复用 `/api/upload`，前端将结果保存为 session 级 `annotated_image`，手动清空或替换，不因新生成自动失效；提交消息时 `annotated_image` 与 `control_image` 并列写入 AgentState，不进入普通 `reference_images`，避免触发语义参考图 VLM 分析。图像生成请求新增 `input_image_urls`，顺序固定为 `control_image` 在前、`annotated_image` 在后；同时保留 `control_image_url` / `ref_image_url` 兼容字段。百炼按 content 数组先图后文发送，火山 `image` 字段在多图时传数组，GrsAI `urls` 字段传数组；同时存在两张输入图时 prompt 前置说明“图1/图2”含义并追加批注说明。
 - 2026-05-09：E-3.5 跨浏览器恢复已人工验证通过：换浏览器后可按 session 恢复历史消息和 prompt 草稿。E-4 先实现不依赖 D 阶段的生成图展示、下载、批注与批注图作为参考图回传；“存入图库”按钮在 E-4 仅做 UI 占位/禁用提示，待 D 阶段完成 `image-rag-mcp`、图库存储表和 `POST /api/library/store` 后再接入真实调用。接入时由后端路由直接调用 MCP `store_generated_image`，不经过 Agent。
 - 2026-05-09：图生图输入从“取最后一张参考图”调整为“单 `control_image` + 多 `reference_images`”。`control_image` 是唯一结构底图，用于约束建筑体量、透视关系、空间尺度和主要构图，并且是唯一进入图像生成 provider API 的图片输入；`reference_images` 只作为语义参考，经 VLM 分析后注入 Agent / Prompt / 评估，不进入 provider 请求体。生成请求统一只传 `control_image_url`，百炼走 `messages[].content[].image`，火山走 `image` 字段，GrsAI 走 `urls=[control_image_url]`。
 - 2026-05-09：修复前端 `localStorage` 恢复时序问题：`localStorage` 正常刷新不会清空；此前 `workspaceStore` 使用 Zustand `skipHydration: true`，但 `ChatWorkspace` 在 `rehydrate()` 完成前加载 session 并调用 `getPromptDraft(sessionId)`，会读到空的 `promptDraftBySession` 并把空草稿写回当前 session，表现为刷新后模板和已生成 prompt 消失。现改为等待 `useWorkspaceStore.persist.rehydrate()` 完成后再加载 session 并恢复 prompt 草稿，同时移除 `PromptReferenceTab` 内重复恢复逻辑，避免组件 mount 顺序互相覆盖。

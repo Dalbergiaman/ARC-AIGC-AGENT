@@ -20,10 +20,11 @@ class BailianClient(ImageGeneratorBase):
             "Content-Type": "application/json",
             "X-DashScope-Async": "enable",
         }
-        content = [{"text": request.prompt}]
-        control_image_url = request.control_image_url
-        if control_image_url:
-            content.append({"image": control_image_url})
+        image_urls = request.input_image_urls or [
+            url for url in [request.control_image_url or request.ref_image_url] if url
+        ]
+        content = [{"image": url} for url in image_urls]
+        content.append({"text": request.prompt})
 
         payload = {
             "model": self._model,

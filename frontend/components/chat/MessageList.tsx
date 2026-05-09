@@ -57,20 +57,23 @@ export function MessageList({ messages, activeToolStatus, generationPreviews }: 
 
       {generationPreviews.length ? (
         <div className="grid gap-3 md:grid-cols-2">
-          {generationPreviews.map((preview) => (
-            <div key={preview.taskId} className="overflow-hidden rounded-2xl border border-black/8 bg-white">
-              {/* Generated images may come from arbitrary remote providers; keep raw img in E-1. */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={preview.imageUrl}
-                alt="生成结果缩略图"
-                className="h-40 w-full object-cover"
-              />
-              <div className="border-t border-black/6 px-3 py-2 text-xs text-muted-foreground">
-                task: {preview.taskId}
+          {generationPreviews.map((preview) => {
+            if (!preview.imageUrl) return null;
+            return (
+              <div key={preview.taskId} className="overflow-hidden rounded-2xl border border-black/8 bg-white">
+                {/* Generated images may come from arbitrary remote providers; keep raw img in E-1. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={preview.imageUrl}
+                  alt="生成结果缩略图"
+                  className="h-40 w-full object-cover"
+                />
+                <div className="border-t border-black/6 px-3 py-2 text-xs text-muted-foreground">
+                  task: {preview.taskId}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : null}
     </div>

@@ -51,22 +51,45 @@ async def generate_image(
     run_id = state.get("run_id", "")
 
     # Build request dict for the Celery task. reference_images are semantic-only;
-    # control_image is the only structural img2img anchor sent to providers.
+    # control_image and annotated_image are explicit img2img anchors sent to providers.
     control_image = state.get("control_image") or {}
+    annotated_image = state.get("annotated_image") or {}
     control_url: str | None = control_image.get("image_url") if isinstance(control_image, dict) else None
+    annotated_url: str | None = annotated_image.get("image_url") if isinstance(annotated_image, dict) else None
+    input_image_urls = [url for url in [control_url, annotated_url] if url]
+    prompt = enhanced_prompt.prompt
+    annotated_note = str(annotated_image.get("note", "") or "").strip()
+    if control_url and annotated_url:
+        prompt_parts = [
+            "图1为结构底图，保持建筑体量、透视、尺度和主要空间关系。",
+            "图2为带批注效果图，按批注说明调整。",
+        ]
+        if annotated_note:
+            prompt_parts.append(f"批注说明：{annotated_note}")
+        prompt_parts.append(prompt)
+        prompt = "\n".join(prompt_parts)
+    elif annotated_url:
+        prompt_parts = ["输入图为带批注效果图，按批注说明调整。"]
+        if annotated_note:
+            prompt_parts.append(f"批注说明：{annotated_note}")
+        prompt_parts.append(prompt)
+        prompt = "\n".join(prompt_parts)
 
     request_dict = {
-        "prompt": enhanced_prompt.prompt,
+        "prompt": prompt,
         "negative_prompt": enhanced_prompt.negative_prompt,
         "control_image_url": control_url,
+        "input_image_urls": input_image_urls,
         # Backward compatibility for providers or tasks still reading the old field.
         "ref_image_url": control_url,
     }
     update_current_span(
         input={
-            "prompt": enhanced_prompt.prompt,
+            "prompt": prompt,
             "negative_prompt": enhanced_prompt.negative_prompt,
             "control_image_url": control_url,
+            "annotated_image_url": annotated_url,
+            "input_image_count": len(input_image_urls),
             "semantic_reference_image_count": len(state.get("reference_images") or []),
             "session_id": session_id,
             "run_id": run_id,

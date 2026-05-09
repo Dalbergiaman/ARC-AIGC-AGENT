@@ -2,6 +2,7 @@
 
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
 
+import { GeneratedImagesTab } from "@/components/workspace/GeneratedImagesTab";
 import { PromptReferenceTab } from "@/components/workspace/PromptReferenceTab";
 import type { GenerationPreview, WorkspaceTab } from "@/lib/types";
 
@@ -100,32 +101,7 @@ export function WorkspacePanel({
           {activeTab === "prompt" ? (
             <PromptReferenceTab sessionId={sessionId} />
           ) : (
-            <div className="px-4 py-4">
-              {generationPreviews.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-black/8 p-4 text-sm text-muted-foreground">
-                  生成结果会在这里出现
-                </div>
-              ) : (
-                <div className="flex flex-col gap-3">
-                  {generationPreviews.map((item) => (
-                    <div
-                      key={item.taskId}
-                      className="overflow-hidden rounded-xl border border-black/8 bg-white"
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={item.imageUrl}
-                        alt="生成结果"
-                        className="h-44 w-full object-cover"
-                      />
-                      <div className="border-t border-black/6 px-3 py-2 text-xs text-muted-foreground">
-                        {item.taskId}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <GeneratedImagesTab sessionId={sessionId} generationPreviews={generationPreviews} />
           )}
         </div>
       </aside>

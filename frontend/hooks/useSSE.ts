@@ -10,7 +10,17 @@ type Handlers = {
   onToolStart?: (tool: string, summary: string) => void;
   onToolEnd?: (tool: string, summary: string) => void;
   onGenerationStart?: (taskId: string, runId?: string) => void;
-  onGenerationDone?: (taskId: string, imageUrl: string, runId?: string) => void;
+  onGenerationDone?: (payload: {
+    taskId: string;
+    imageUrl: string;
+    runId?: string;
+    provider?: string | null;
+    score?: number | null;
+    status?: string;
+    prompt?: string;
+    negativePrompt?: string | null;
+    rawResponse?: Record<string, unknown> | null;
+  }) => void;
   onPromptUpdate?: (
     keywords: Record<string, string>,
     llmDescription: string,
@@ -113,11 +123,19 @@ export function useSSE({
         typeof data.task_id === "string" &&
         typeof data.image_url === "string"
       ) {
-        handlers.onGenerationDone?.(
-          data.task_id,
-          data.image_url,
-          typeof data.run_id === "string" ? data.run_id : undefined,
-        );
+        handlers.onGenerationDone?.({
+          taskId: data.task_id,
+          imageUrl: data.image_url,
+          runId: typeof data.run_id === "string" ? data.run_id : undefined,
+          provider: typeof data.provider === "string" ? data.provider : null,
+          score: typeof data.score === "number" ? data.score : null,
+          status: typeof data.status === "string" ? data.status : "done",
+          prompt: typeof data.prompt === "string" ? data.prompt : undefined,
+          negativePrompt: typeof data.negative_prompt === "string" ? data.negative_prompt : null,
+          rawResponse: data.raw_response && typeof data.raw_response === "object"
+            ? data.raw_response as Record<string, unknown>
+            : null,
+        });
       }
       if (
         eventType === "prompt_update" &&

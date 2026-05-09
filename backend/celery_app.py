@@ -6,6 +6,7 @@ celery_app = Celery(
     "aigc_agent",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
+    include=["tasks.image_task"],
 )
 
 celery_app.conf.update(

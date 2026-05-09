@@ -74,16 +74,19 @@ export function ChatWorkspace({ sessionId }: Props) {
     toggleWorkspace,
     setWorkspaceWidthRatio,
     getControlImage,
+    getAnnotatedImage,
     getReferenceImages,
     getPromptDraft,
     promptDraft,
     setSessionPromptDraft,
     setSessionReferenceImages,
     updateControlImage,
+    updateAnnotatedImage,
     updateReferenceImage,
   } = useWorkspaceStore();
 
   const controlImage = getControlImage(sessionId);
+  const annotatedImage = getAnnotatedImage(sessionId);
   const referenceImages = getReferenceImages(sessionId);
 
   useEffect(() => {
@@ -152,13 +155,16 @@ export function ChatWorkspace({ sessionId }: Props) {
         );
         setGenerationPreviews(
           (sessionDetail.generation_tasks ?? [])
-            .filter((item) => Boolean(item.image_url))
             .map((item) => ({
               taskId: item.task_id ?? item.id,
               imageUrl: item.image_url ?? "",
               runId: undefined,
               score: item.score ?? null,
               provider: item.provider ?? null,
+              status: item.status,
+              prompt: item.prompt,
+              negativePrompt: item.negative_prompt ?? null,
+              rawResponse: item.raw_response ?? null,
             })),
         );
       } catch (error) {
@@ -238,10 +244,20 @@ export function ChatWorkspace({ sessionId }: Props) {
       setToolStatus({ tool: _tool, summary });
     },
     onGenerationStart: (taskId, runId) => {
-      upsertGenerationPreview({ taskId, imageUrl: "", runId });
+      upsertGenerationPreview({ taskId, imageUrl: "", runId, status: "running" });
     },
-    onGenerationDone: (taskId, imageUrl, runId) => {
-      upsertGenerationPreview({ taskId, imageUrl, runId });
+    onGenerationDone: (payload) => {
+      upsertGenerationPreview({
+        taskId: payload.taskId,
+        imageUrl: payload.imageUrl,
+        runId: payload.runId,
+        status: payload.status ?? "done",
+        provider: payload.provider,
+        score: payload.score,
+        prompt: payload.prompt,
+        negativePrompt: payload.negativePrompt,
+        rawResponse: payload.rawResponse,
+      });
       setActiveTab("images");
     },
     onPromptUpdate: (keywords, llmDescription, customDescription, negativePrompt, promptTemplate) => {
@@ -281,6 +297,10 @@ export function ChatWorkspace({ sessionId }: Props) {
       controlImage && !controlImage.uploading && !controlImage.error && controlImage.url
         ? controlImage
         : null;
+    const readyAnnotatedImage =
+      annotatedImage && !annotatedImage.uploading && !annotatedImage.error && annotatedImage.url
+        ? annotatedImage
+        : null;
     const readyImages = referenceImages.filter((img) => !img.uploading && !img.error && img.url && !img.sent);
     const payload = {
       content,
@@ -289,6 +309,13 @@ export function ChatWorkspace({ sessionId }: Props) {
           file_id: readyControlImage.fileId,
           url: readyControlImage.url,
           note: readyControlImage.note ?? "",
+        },
+      }),
+      ...(readyAnnotatedImage && {
+        annotated_image: {
+          file_id: readyAnnotatedImage.fileId,
+          url: readyAnnotatedImage.url,
+          note: readyAnnotatedImage.note ?? "",
         },
       }),
       ...(readyImages.length > 0 && {
@@ -312,6 +339,9 @@ export function ChatWorkspace({ sessionId }: Props) {
       const response = await submitChatMessage(sessionId, payload);
       if (readyControlImage) {
         updateControlImage(sessionId, { sent: true });
+      }
+      if (readyAnnotatedImage) {
+        updateAnnotatedImage(sessionId, { sent: true });
       }
       // Mark submitted images as sent (keep them visible, don't clear)
       readyImages.forEach((img) => updateReferenceImage(sessionId, img.fileId, { sent: true }));
@@ -354,7 +384,7 @@ export function ChatWorkspace({ sessionId }: Props) {
       activeTab={activeTab}
       collapsed={workspaceCollapsed}
       widthRatio={workspaceWidthRatio}
-      generationPreviews={generationPreviews.filter((item) => item.imageUrl)}
+      generationPreviews={generationPreviews}
       isResizing={isResizingWorkspace}
       onTabChange={setActiveTab}
       onToggle={toggleWorkspace}
