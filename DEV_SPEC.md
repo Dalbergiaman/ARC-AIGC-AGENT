@@ -977,8 +977,9 @@ raise TimeoutError("generation timeout")
 
 Agent 收到后将 `control_image` 存入 `AgentState.control_image`，生成节点将其写入 `GenerationRequest.control_image_url`；同时将 `reference_images` 的 `url`、`intent`、`note` 存入 `AgentState.reference_images`，并调用 `analyze_reference_image(image_url=url)` 进行视觉分析。C-5 当前评估仍使用整体参考图相似度；按参考意图动态调整评估权重属于后续扩展。
 
-当前实现状态：`POST /api/upload` 返回 `{file_id, url}`；`POST /api/chat/sessions/{session_id}/messages` 已支持 `control_image` / `reference_images` / `workspace` payload，并同步更新 Agent 状态。`control_image` 草稿和参考图草稿由前端按 `sessionId` 存入 `localStorage`，已发送图保留展示但不再重复提交。
-E-3.5 起需将参考图会话状态写入 PostgreSQL `reference_images`：`analysis` JSON 中保存 VLM 分析、用户 `intent/note`、发送状态等；前端 `localStorage` 只作为未同步草稿和 UI 恢复兜底。
+当前实现状态：`POST /api/upload` 返回 `{file_id, url}`；`POST /api/chat/sessions/{session_id}/messages` 已支持 `control_image` / `reference_images` / `workspace` payload，并同步更新 Agent 状态。`sessions.workspace_state` 是结构化 prompt 草稿的服务端主存储；已发送参考图写入 PostgreSQL `reference_images.analysis`，其中保存 VLM 分析、用户 `intent/note`、`reference_intent/intent_note`、发送状态等；前端 `localStorage` 只作为未同步草稿和同浏览器 UI 恢复兜底。`control_image` 当前仍按 sessionId 存前端草稿，随下一条消息提交给 Agent。
+
+注意：早期参考图记录可能只含 `analysis.intent` / `analysis.note`，分析完成后的记录会补充 `reference_intent` / `intent_note`。前端恢复历史会话时应兼容两组字段，避免旧记录或未完成分析的记录恢复为默认参考意图。
 
 ---
 
@@ -986,10 +987,13 @@ E-3.5 起需将参考图会话状态写入 PostgreSQL `reference_images`：`anal
 
 ```
 POST   /api/sessions                              创建会话
+GET    /api/sessions                              获取会话列表
 GET    /api/sessions/{session_id}                 获取会话详情
+DELETE /api/sessions/{session_id}                 删除会话（级联删除 messages / reference_images / generation_tasks）
 POST   /api/chat/sessions/{session_id}/messages   发送消息，返回 stream_id（E 阶段扩展 reference_images / workspace payload）
 GET    /api/chat/sessions/{session_id}/stream     建立 SSE 流（query: stream_id）
 POST   /api/upload                                上传参考图
+GET    /api/styles/templates                      获取后端风格模板（来自 prompt_templates.py）
 POST   /api/library/store                         规划：存入图库（D/E 阶段，前端按钮触发，后端直接调用 MCP）
 POST   /api/generation/tasks                      规划：独立触发图像生成（当前主链路由 Agent SSE + Celery 完成）
 GET    /api/generation/tasks/{task_id}/status     规划：查询独立生成任务状态
@@ -1000,7 +1004,7 @@ PUT    /api/dashboard/config                      保存配置（模型、API Ke
 GET    /api/dashboard/providers                   获取支持的图像生成平台列表
 ```
 
-当前已实现路由：`/health`、`/api/sessions`、`/api/chat/sessions/{session_id}/messages`、`/api/chat/sessions/{session_id}/stream`、`/api/upload`、`/api/dashboard/config`、`/api/dashboard/providers`。`library`、`generation`、`annotations` 相关路由仍是规划项，不能作为当前联调入口。
+当前已实现路由：`/health`、`/api/sessions`（POST/GET）、`/api/sessions/{session_id}`（GET/DELETE）、`/api/chat/sessions/{session_id}/messages`、`/api/chat/sessions/{session_id}/stream`、`/api/upload`、`/api/styles/templates`、`/api/dashboard/config`、`/api/dashboard/providers`。`library`、`generation`、`annotations` 相关路由仍是规划项，不能作为当前联调入口。
 
 ---
 
@@ -1008,10 +1012,10 @@ GET    /api/dashboard/providers                   获取支持的图像生成平
 
 ```sql
 -- 主业务库（PostgreSQL）
-sessions          (id, title, design_state JSON, created_at)
+sessions          (id, title, design_state JSON, workspace_state JSON, created_at)
 messages          (id, session_id, role, content, created_at)
 reference_images  (id, session_id, file_id, url, analysis JSON)
-generation_tasks  (id, session_id, prompt, image_url, status, created_at)
+generation_tasks  (id, session_id, task_id, prompt, negative_prompt, provider, image_url, status, score, raw_response JSON, created_at)
 -- LangGraph checkpointer 表由 langgraph-checkpoint-postgres 自动创建
 -- Dashboard 配置不存 DB，改用 backend/config/dashboard.yaml（见下方说明）
 
@@ -1029,7 +1033,7 @@ image_library (
 )
 ```
 
-当前实现状态：四张主业务表已由 SQLAlchemy 定义并在 FastAPI lifespan 中自动创建；`messages` 已用于 Chat/SSE 主链路，`sessions.design_state`、`reference_images`、`generation_tasks` 的业务写入仍未完整接入。E-3.5 需要补齐会话业务状态持久化：新增或复用 JSON 字段保存 workspace prompt 草稿；将参考图 `intent/note/analysis/sent` 写入 `reference_images.analysis`；将生成任务 prompt、negative prompt、provider、score、raw_response 等写入 `generation_tasks` 或扩展表结构。
+当前实现状态：四张主业务表已由 SQLAlchemy 定义并在 FastAPI lifespan 中自动创建；`messages` 已用于 Chat/SSE 主链路；`sessions.workspace_state` 已作为 prompt 草稿主存储；`reference_images.analysis` 已保存参考图分析、用户意图/说明和 `sent` 状态；`generation_tasks` 已保存生成任务 `task_id`、prompt、negative prompt、provider、status、score、raw_response 等，用于历史会话恢复生成结果。旧开发库的 `sessions.title` / `sessions.workspace_state` 和 `generation_tasks` 扩展列由 `models/schema_guard.py` 在启动期补齐。
 
 **Milvus Collection（向量库）**
 ```
@@ -1071,11 +1075,7 @@ langfuse:
 
 `backend/config/dashboard.yaml.example` 作为模板提交到 git，实际配置文件加入 `.gitignore`。
 
-当前实现漂移（C-8 需修复）：
-- `backend/services/dashboard_service.py` 的 `DEFAULT_CONFIG` 还没有 `embedding` 配置块，`backend/api/routes/dashboard.py` 的 `PUT /config` 也不接受 `embedding` patch。
-- `backend/services/dashboard_service.py` 的 image provider 列表仍包含 `openrouter`，缺少 `grsai`；这与 `core/image/factory.py` 当前注册的 `bailian / volcengine / grsai` 不一致。
-- 前端 `frontend/lib/types.ts` 中 `ImageProviderConfig` 缺少 `model` 字段，`ImageProviderOption` 缺少 `models` 字段，`ImageProviderConfig.tsx` 也没有图像模型选择 UI。
-- `backend/config/dashboard.yaml.example` 还没有 `embedding` 配置块，且 GrsAI 注释大小写需统一为 `grsai`。
+当前实现状态：C-8 已完成 Dashboard 配置漂移修正。后端 provider 列表与图像生成工厂对齐为 `bailian / volcengine / grsai`；Dashboard 配置已包含 `embedding` 配置块；前端类型与 UI 已支持 `image_provider.model` 和图像模型选择；`backend/config/dashboard.yaml.example` 已补齐 `embedding` 模板。
 
 ---
 
@@ -1345,7 +1345,7 @@ backend/tests/
 - [x] 编写 `backend/agent/state.py`（`AgentState` / `DesignState` / `ReferenceImageAnalysis` / `GenerationResult` / `EvaluationResult` / `ImageRecord` 全部类型定义，均使用 `TypedDict`）
 - [x] 编写 `backend/agent/state_utils.py`（规则计算 `missing_fields` / `completeness`，生成 `last_search_signature`，重置当前生成任务运行态）
 - [x] 编写 `backend/agent/checkpointer.py`（`AsyncPostgresSaver`，生命周期由 FastAPI lifespan `async with` 管理）
-- [x] 编写 `backend/agent/graph.py` 骨架（`agent` 决策节点 + `rag_gate` + 确定性生成子流程，`interrupt_before=["agent"]`，节点均为 stub）
+- [x] 编写 `backend/agent/graph.py` 骨架（`agent` 决策节点 + `rag_gate` + 确定性生成子流程，早期节点为 stub；当前已移除 `interrupt_before=["agent"]`，中断依赖 Redis cancel flag）
 - [x] 验证空 Graph 可以正常导入，节点结构正确
 
 > ⚠️ 注意：`langgraph-checkpoint-postgres` 需要在 FastAPI 启动时初始化（`lifespan` 事件），不能在请求时临时创建连接。
