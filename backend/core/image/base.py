@@ -7,6 +7,7 @@ class GenerationRequest:
     prompt: str
     negative_prompt: str | None = None
     ref_image_url: str | None = None
+    control_image_url: str | None = None
     width: int = 1344
     height: int = 768
     steps: int = 30

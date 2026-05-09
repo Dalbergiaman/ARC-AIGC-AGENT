@@ -20,13 +20,16 @@ class BailianClient(ImageGeneratorBase):
             "Content-Type": "application/json",
             "X-DashScope-Async": "enable",
         }
+        content = [{"text": request.prompt}]
+        control_image_url = request.control_image_url
+        if control_image_url:
+            content.append({"image": control_image_url})
+
         payload = {
             "model": self._model,
             "input": {
                 "messages": [
-                    {"role": "user", "content": [
-                        {"text": request.prompt},
-                    ]},
+                    {"role": "user", "content": content},
                 ]
             },
             "parameters": {
@@ -36,8 +39,6 @@ class BailianClient(ImageGeneratorBase):
         }
         if request.seed is not None:
             payload["parameters"]["seed"] = request.seed
-        if request.ref_image_url:
-            payload["input"]["ref_img"] = request.ref_image_url
 
         async with httpx.AsyncClient(timeout=120.0) as client:
             submit_resp = await client.post(self._submit_endpoint, headers=headers, json=payload)

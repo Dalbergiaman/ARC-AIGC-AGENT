@@ -50,22 +50,24 @@ async def generate_image(
     session_id = state.get("turn_id", "")
     run_id = state.get("run_id", "")
 
-    # Build request dict for the Celery task
-    ref_url: str | None = None
-    ref_images = state.get("reference_images") or []
-    if ref_images:
-        ref_url = ref_images[-1].get("image_url")
+    # Build request dict for the Celery task. reference_images are semantic-only;
+    # control_image is the only structural img2img anchor sent to providers.
+    control_image = state.get("control_image") or {}
+    control_url: str | None = control_image.get("image_url") if isinstance(control_image, dict) else None
 
     request_dict = {
         "prompt": enhanced_prompt.prompt,
         "negative_prompt": enhanced_prompt.negative_prompt,
-        "ref_image_url": ref_url,
+        "control_image_url": control_url,
+        # Backward compatibility for providers or tasks still reading the old field.
+        "ref_image_url": control_url,
     }
     update_current_span(
         input={
             "prompt": enhanced_prompt.prompt,
             "negative_prompt": enhanced_prompt.negative_prompt,
-            "ref_image_url": ref_url,
+            "control_image_url": control_url,
+            "semantic_reference_image_count": len(state.get("reference_images") or []),
             "session_id": session_id,
             "run_id": run_id,
         }

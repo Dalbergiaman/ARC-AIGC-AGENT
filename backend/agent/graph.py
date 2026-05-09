@@ -119,6 +119,7 @@ def _build_prompt_draft(
     design_state: dict,
     reference_images: list[dict],
     similar_cases: list[dict],
+    control_image: dict | None = None,
     custom_description: str = "",
     user_prompt_hint: str = "",
     llm_reply_hint: str = "",
@@ -133,7 +134,10 @@ def _build_prompt_draft(
             reference_images=reference_images,
             similar_cases=similar_cases,
             user_prompt_hint=user_prompt_hint,
-            llm_reply_hint=llm_reply_hint,
+            llm_reply_hint=" ".join(filter(None, [
+                "保持图生图底图的建筑体量、空间尺度、透视关系和主要构图。" if control_image else "",
+                llm_reply_hint,
+            ])),
         ),
         "custom_description": custom_description or "",
         "negative_prompt": negative_prompt or "",
@@ -197,6 +201,7 @@ async def agent_node(state: AgentState) -> dict:
     """
     design_state = dict(state.get("design_state") or {})
     reference_images = list(state.get("reference_images") or [])
+    control_image = state.get("control_image")
     similar_cases = list(state.get("similar_cases") or [])
     messages = list(state.get("messages") or [])
     explicit_generation_intent = has_explicit_generation_intent(messages)
@@ -341,6 +346,7 @@ async def agent_node(state: AgentState) -> dict:
         design_state=design_state,
         reference_images=reference_images,
         similar_cases=similar_cases,
+        control_image=control_image if isinstance(control_image, dict) else None,
         custom_description=custom_description,
         user_prompt_hint=prompt_hint,
         llm_reply_hint=llm_description,
@@ -437,6 +443,7 @@ async def enhance_prompt_node(state: AgentState) -> dict:
     """Build the image generation prompt from DesignState + similar cases."""
     design_state = dict(state.get("design_state") or {})
     reference_images = list(state.get("reference_images") or [])
+    control_image = state.get("control_image")
     similar_cases = list(state.get("similar_cases") or [])
 
     enhanced = await enhance_prompt(
@@ -451,6 +458,7 @@ async def enhance_prompt_node(state: AgentState) -> dict:
         design_state=design_state,
         reference_images=reference_images,
         similar_cases=similar_cases,
+        control_image=control_image if isinstance(control_image, dict) else None,
         custom_description=str((state.get("workspace") or {}).get("custom_description", "") or ""),
         user_prompt_hint=str((state.get("workspace") or {}).get("llm_description", "") or ""),
         llm_reply_hint=enhanced.prompt,
@@ -636,6 +644,7 @@ async def refine_prompt_node(state: AgentState) -> dict:
         design_state=dict(state.get("design_state") or {}),
         reference_images=list(state.get("reference_images") or []),
         similar_cases=list(state.get("similar_cases") or []),
+        control_image=state.get("control_image") if isinstance(state.get("control_image"), dict) else None,
         custom_description=str((state.get("workspace") or {}).get("custom_description", "") or ""),
         user_prompt_hint=str((state.get("workspace") or {}).get("llm_description", "") or ""),
         llm_reply_hint=refined.prompt,

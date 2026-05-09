@@ -141,6 +141,15 @@ export type ReferenceImageDraft = {
   analysis?: Record<string, unknown> | null;
 };
 
+export type ControlImageDraft = {
+  fileId: string;
+  url: string;
+  note?: string;
+  uploading?: boolean;
+  error?: string;
+  sent?: boolean;
+};
+
 export type SessionReferenceImage = {
   id: string;
   file_id: string;
@@ -185,6 +194,11 @@ export type SubmitMessagePayload = {
     intent: ReferenceIntent;
     note?: string;
   }>;
+  control_image?: {
+    file_id: string;
+    url: string;
+    note?: string;
+  } | null;
   workspace?: {
     keywords?: Record<string, string>;
     llm_description: string;

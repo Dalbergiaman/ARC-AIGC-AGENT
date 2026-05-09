@@ -177,6 +177,7 @@ aigc_agent/
 class AgentState(MessagesState):  # MessagesState 是带 add_messages reducer 的 TypedDict
     design_state: DesignState            # 结构化设计参数（工作记忆核心）
     reference_images: list[ReferenceImageAnalysis]  # 参考图分析结果
+    control_image: ControlImage | None   # 图生图结构底图（单张），用于约束建筑体量/透视/尺度/空间关系
     ready_to_generate: bool              # 控制流：是否触发生成
     generation_results: list[GenerationResult]      # 历史生成结果
     retry_count: int                     # 当前生成任务的重试次数（上限 3，每次新生成意图重置）
@@ -208,6 +209,12 @@ class ReferenceImageAnalysis(TypedDict, total=False):
     description: str
     reference_intent: str  # composition / color / style / material / lighting / surroundings / other
     intent_note: str       # 用户对参考意图的补充说明
+
+class ControlImage(TypedDict, total=False):
+    file_id: str
+    image_url: str
+    note: str
+    sent: bool
 
 class GenerationResult(TypedDict, total=False):  # Agent 层，含评估分数
     image_url: str
@@ -422,7 +429,8 @@ session_id 在整个对话窗口内不变；run_id 每轮 Agent 执行生成一�
 
 **提示词与参考图（`PromptReferenceTab`）**
 - 顶部展示当前正向 prompt 和 negative prompt；Agent 生成或修正 prompt 后实时更新，用户也可以手动编辑。
-- 支持上传多张参考图，每张图必须选择参考意图：构图、色彩、建筑样式、材质、光线、环境、其他；可选填写补充说明。
+- 支持上传 1 张 `control_image` 作为图生图结构底图，生成时优先保留建筑体量、透视关系、空间尺度和主要构图；底图不参与“最后一张参考图”推断。
+- 支持上传多张 `reference_images` 作为语义参考，每张图必须选择参考意图：构图、色彩、建筑样式、材质、光线、环境、其他；可选填写补充说明。参考图继续走 VLM 分析并注入 Agent / Prompt，不作为默认图生图底图。
 - 中部放置可滑动/可输入的量化参数，首批只纳入前端草稿：`temperature`、`lightingIntensity`、`stylization`、`materialStrength`、`compositionStrength`。
 - 底部展示 `prompt_templates.py` 中已定义的风格模板，一键选择后写入 `selectedStyle` 并同步到下一轮消息。
 
@@ -486,7 +494,8 @@ core/image/
 class GenerationRequest:
     prompt: str
     negative_prompt: str | None = None
-    ref_image_url: str | None
+    ref_image_url: str | None = None       # 兼容旧字段；新代码写入 control_image_url
+    control_image_url: str | None = None   # 单张图生图结构底图
     width: int = 1344
     height: int = 768
     steps: int = 30
@@ -529,13 +538,13 @@ class ImageGeneratorFactory:
 ### 三个客户端的核心差异
 
 **百炼（`bailian_client.py`）**
-异步任务制，两步：提交任务拿 `task_id` → 轮询 `/api/v1/tasks/{task_id}` 直到 `SUCCEEDED`。轮询逻辑封装在客户端内部，对外暴露同步接口。当前代码使用 DashScope image-generation endpoint，并从 `output.choices[0].message.content[0].image` 取图像 URL；如切换万相旧接口需同步修改 payload 和取值路径。
+异步任务制，两步：提交任务拿 `task_id` → 轮询 `/api/v1/tasks/{task_id}` 直到 `SUCCEEDED`。轮询逻辑封装在客户端内部，对外暴露同步接口。当前代码使用 DashScope image-generation endpoint，并从 `output.choices[0].message.content[0].image` 取图像 URL；图生图时仅将 `control_image_url` 按 `messages[].content[].image` 传入。
 
 **豆包（`volcengine_client.py`）**
-同步返回，直接 POST 拿结果，响应结构类似 OpenAI images API，从 `data[0].url` 取图片 URL。
+同步返回，直接 POST 拿结果，响应结构类似 OpenAI images API，从 `data[0].url` 取图片 URL。图生图时使用请求体 `image` 字段，仅传 `control_image_url`。
 
 **GrsAI（`grsai_client.py`）**
-同步返回，`gpt-image` 模型 POST 到 `https://grsai.dakka.com.cn/v1/draw/completions`，`nano-banana` 模型 POST 到 `/v1/draw/nano-banana`，响应从 `results[0].url` 取图片 URL。构造器接收 `model` 参数，根据模型名称自动选择 endpoint 和 payload 格式。
+同步返回，`gpt-image` 模型 POST 到 `https://grsai.dakka.com.cn/v1/draw/completions`，`nano-banana` 模型 POST 到 `/v1/draw/nano-banana`，响应从 `results[0].url` 取图片 URL。构造器接收 `model` 参数，根据模型名称自动选择 endpoint 和 payload 格式。图生图时使用请求体 `urls` 字段传 URL 列表，列表中只包含 `control_image_url`。
 
 ### 调度器
 
@@ -907,7 +916,13 @@ raise TimeoutError("generation timeout")
 
 ---
 
-## 参考图上传流程
+## Control Image 与参考图上传流程
+
+### 设计原则
+
+- `control_image` 是图生图结构底图，v1 只允许 1 张。它用于约束建筑形态、体量、透视、尺度、空间关系和主要构图。
+- `reference_images` 是语义参考图，允许多张。它们继续通过 VLM 分析后注入 `agent_node`、prompt 构建和结果评估，用于风格、材质、光线、色彩、环境等参考。
+- 不再从 `reference_images` 中自动取最后一张作为图生图底图；用户必须在前端显式上传或替换 `control_image`。
 
 ### 存储策略
 
@@ -935,6 +950,11 @@ raise TimeoutError("generation timeout")
 ```json
 {
   "content": "参考这几张图，生成一个现代极简别墅效果图",
+  "control_image": {
+    "file_id": "uuid",
+    "url": "/static/uploads/base.jpg",
+    "note": "保留原图建筑体量、低机位透视和庭院尺度"
+  },
   "reference_images": [
     {
       "file_id": "uuid",
@@ -955,9 +975,9 @@ raise TimeoutError("generation timeout")
 }
 ```
 
-Agent 收到后将 `url`、`intent`、`note` 存入 `AgentState.reference_images`，并调用 `analyze_reference_image(image_url=url)` 进行视觉分析。C-5 当前评估仍使用整体参考图相似度；按参考意图动态调整评估权重属于后续扩展。
+Agent 收到后将 `control_image` 存入 `AgentState.control_image`，生成节点将其写入 `GenerationRequest.control_image_url`；同时将 `reference_images` 的 `url`、`intent`、`note` 存入 `AgentState.reference_images`，并调用 `analyze_reference_image(image_url=url)` 进行视觉分析。C-5 当前评估仍使用整体参考图相似度；按参考意图动态调整评估权重属于后续扩展。
 
-当前实现状态：`POST /api/upload` 返回 `{file_id, url}`；`POST /api/chat/sessions/{session_id}/messages` 已支持 `reference_images` / `workspace` payload，并同步更新后端 schema 与 Agent 状态。参考图草稿由前端按 `sessionId` 存入 `localStorage`，已发送图保留展示但不再重复提交。
+当前实现状态：`POST /api/upload` 返回 `{file_id, url}`；`POST /api/chat/sessions/{session_id}/messages` 已支持 `control_image` / `reference_images` / `workspace` payload，并同步更新 Agent 状态。`control_image` 草稿和参考图草稿由前端按 `sessionId` 存入 `localStorage`，已发送图保留展示但不再重复提交。
 E-3.5 起需将参考图会话状态写入 PostgreSQL `reference_images`：`analysis` JSON 中保存 VLM 分析、用户 `intent/note`、发送状态等；前端 `localStorage` 只作为未同步草稿和 UI 恢复兜底。
 
 ---
@@ -1460,14 +1480,17 @@ backend/tests/
 
 - [x] 编写 `components/workspace/WorkspacePanel.tsx`，提供"提示词与参考图"、"生成图片"两个标签页
 - [x] 编写 `PromptReferenceTab.tsx`：顶部 prompt / negative prompt 展示与手动编辑
+- [x] 增加单张 `control_image` 上传控件：作为图生图结构底图，独立于多张语义参考图；生成时不再自动取最后一张参考图作为底图
 - [x] 编写参考图上传组件（内嵌于 `PromptReferenceTab`）+ 意图选择下拉：上传参考图后必须选择参考意图（构图 / 色彩 / 建筑样式 / 材质 / 光线 / 环境 / 其他）和可选说明
 - [x] 扩展 `POST /api/chat/sessions/{session_id}/messages` 请求体，支持 `reference_images` 与 `workspace` payload
+- [x] 扩展 `POST /api/chat/sessions/{session_id}/messages` 请求体，支持 `control_image` payload；后端写入 `AgentState.control_image`
 - [x] 后端将 `intent` / `note` 预填入 `input_state["reference_images"]`，`agent_node` 分析后合并 intent/note
 - [x] `ReferenceImageAnalysis` 新增 `reference_intent` / `intent_note` 字段
 - [x] 参考图发送后标记 `sent: true`，保持显示在右侧，已发送的图禁止修改意图；下次发消息只发未发送的图
 - [x] 参考图列表按 sessionId 存 localStorage，刷新/切换 session 后恢复，session 间相互隔离
 - [x] 本地开发环境参考图转 base64 传给 VLM（`image_analysis.py` 的 `_to_data_url`），解决 VLM 无法访问 localhost URL 的问题；生产环境 MinIO 接入后图片有公网 URL，可直接传 URL
 - [x] 验证 Agent 收到图片后触发 `analyze_reference_image`，并保留用户标注的参考意图
+- [x] 图像生成层支持单张 `control_image_url`：百炼通过 `messages[].content[].image`，火山通过 `image` 字段，GrsAI 通过 `urls` 列表；`reference_images` 不进入 provider 请求体
 
 **E-3 参数滑块、风格模板与 prompt 实时同步**
 
@@ -1481,12 +1504,12 @@ backend/tests/
 
 **E-3.5 会话工作区服务端持久化（E-4 前置）**
 
-- [ ] 新增后端 session workspace 持久化能力：建议 `sessions` 增加 `workspace_state JSON`（或等价表），保存 `keywords`、`llm_description`、`custom_description`、`negative_prompt`、`prompt_template`
-- [ ] 扩展 `GET /api/sessions/{session_id}` 返回 `workspace_state`，前端进入历史会话时优先用 PostgreSQL 恢复 prompt 草稿；`localStorage` 仅作为未同步兜底
-- [ ] 在 `POST /api/chat/sessions/{session_id}/messages` 接收 `workspace` payload 后同步写入 PostgreSQL，Agent SSE `prompt_update` 后也要持久化最新草稿，避免只存在浏览器
-- [ ] 将已上传/已发送参考图写入 `reference_images` 表，`analysis` JSON 保存 VLM 分析、`intent`、`note`、`sent` 等；前端参考图列表刷新后从后端恢复
-- [ ] 将生成任务/结果写入 PostgreSQL：保存 task_id、prompt、negative_prompt、image_url、provider、status、score、raw_response，供 E-4 生成图片区刷新后恢复
-- [ ] 明确删除会话时级联删除 workspace_state、reference_images、generation_tasks；保留 localStorage 清理作为前端辅助
+- [x] 新增后端 session workspace 持久化能力：建议 `sessions` 增加 `workspace_state JSON`（或等价表），保存 `keywords`、`llm_description`、`custom_description`、`negative_prompt`、`prompt_template`
+- [x] 扩展 `GET /api/sessions/{session_id}` 返回 `workspace_state`，前端进入历史会话时优先用 PostgreSQL 恢复 prompt 草稿；`localStorage` 仅作为未同步兜底
+- [x] 在 `POST /api/chat/sessions/{session_id}/messages` 接收 `workspace` payload 后同步写入 PostgreSQL，Agent SSE `prompt_update` 后也要持久化最新草稿，避免只存在浏览器
+- [x] 将已上传/已发送参考图写入 `reference_images` 表，`analysis` JSON 保存 VLM 分析、`intent`、`note`、`sent` 等；前端参考图列表刷新后从后端恢复
+- [x] 将生成任务/结果写入 PostgreSQL：保存 task_id、prompt、negative_prompt、image_url、provider、status、score、raw_response，供 E-4 生成图片区刷新后恢复
+- [x] 明确删除会话时级联删除 workspace_state、reference_images、generation_tasks；保留 localStorage 清理作为前端辅助
 - [ ] 验证跨浏览器/清空 localStorage 后，历史消息、prompt 草稿、已发送参考图、生成图结果仍可按 session 恢复
 
 **E-4 生成图片工作区、批注与下载**
@@ -1521,6 +1544,7 @@ backend/tests/
 7. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-09：图生图输入从“取最后一张参考图”调整为“单 `control_image` + 多 `reference_images`”。`control_image` 是唯一结构底图，用于约束建筑体量、透视关系、空间尺度和主要构图，并且是唯一进入图像生成 provider API 的图片输入；`reference_images` 只作为语义参考，经 VLM 分析后注入 Agent / Prompt / 评估，不进入 provider 请求体。生成请求统一只传 `control_image_url`，百炼走 `messages[].content[].image`，火山走 `image` 字段，GrsAI 走 `urls=[control_image_url]`。
 - 2026-05-09：修复前端 `localStorage` 恢复时序问题：`localStorage` 正常刷新不会清空；此前 `workspaceStore` 使用 Zustand `skipHydration: true`，但 `ChatWorkspace` 在 `rehydrate()` 完成前加载 session 并调用 `getPromptDraft(sessionId)`，会读到空的 `promptDraftBySession` 并把空草稿写回当前 session，表现为刷新后模板和已生成 prompt 消失。现改为等待 `useWorkspaceStore.persist.rehydrate()` 完成后再加载 session 并恢复 prompt 草稿，同时移除 `PromptReferenceTab` 内重复恢复逻辑，避免组件 mount 顺序互相覆盖。
 - 2026-05-09：决定新增 E-3.5 作为 E-4 前置阶段：当前 `localStorage` 只能恢复同一浏览器的参考图和 prompt 草稿，不满足历史 session 的服务端恢复语义。E-3.5 目标是把会话业务状态迁移到 PostgreSQL：结构化 prompt 草稿存 `sessions.workspace_state` 或等价 JSON；参考图 `intent/note/sent/analysis` 存 `reference_images.analysis`；生成任务结果存 `generation_tasks` 或扩展表。`localStorage` 后续只保留布局偏好、未同步草稿兜底和临时 UI 状态。这个阶段应在 E-4 之前完成，因为 E-4 的生成图片工作区依赖生成结果刷新恢复能力，否则会返工。
 - 2026-05-09：修复 E-3 prompt 草稿刷新丢失问题：此前只有参考图和 `prompt_template` 按 `sessionId` 持久化，完整结构化草稿仍是内存状态，关闭网页后 `keywords` / `llm_description` / `custom_description` / `negative_prompt` 会丢失。现调整 `workspaceStore`，新增 `promptDraftBySession` 并持久化到 `localStorage`；SSE `prompt_update`、用户编辑 `custom_description` / `negative_prompt`、重置草稿和风格模板选择都会同步写入对应 session。进入会话时从 `promptDraftBySession[sessionId]` 恢复整份 JSON 草稿，保持历史对话与右侧 prompt 状态一致。后端 Agent 状态仍为权威决策状态，本阶段不新增数据库 schema。

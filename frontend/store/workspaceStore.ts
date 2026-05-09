@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import type { PromptDraft, ReferenceImageDraft, StyleTemplate, WorkspaceTab } from "@/lib/types";
+import type { ControlImageDraft, PromptDraft, ReferenceImageDraft, StyleTemplate, WorkspaceTab } from "@/lib/types";
 
 const MIN_WORKSPACE_RATIO = 0.22;
 const MAX_WORKSPACE_RATIO = 0.65;
@@ -26,6 +26,7 @@ type WorkspaceStore = {
   // Active prompt draft for the current session
   promptDraft: PromptDraft;
   // Session-scoped workspace state persisted to localStorage
+  controlImageBySession: Record<string, ControlImageDraft | null>;
   referenceImagesBySession: Record<string, ReferenceImageDraft[]>;
   promptDraftBySession: Record<string, PromptDraft>;
   promptTemplateBySession: Record<string, StyleTemplate | null>;
@@ -48,6 +49,10 @@ type WorkspaceStore = {
   ) => void;
   setSessionPromptTemplate: (sessionId: string, promptTemplate: StyleTemplate | null) => void;
   // Reference image actions (all scoped to a sessionId)
+  getControlImage: (sessionId: string) => ControlImageDraft | null;
+  setControlImage: (sessionId: string, img: ControlImageDraft | null) => void;
+  updateControlImage: (sessionId: string, patch: Partial<ControlImageDraft>) => void;
+  removeControlImage: (sessionId: string) => void;
   getReferenceImages: (sessionId: string) => ReferenceImageDraft[];
   addReferenceImage: (sessionId: string, img: ReferenceImageDraft) => void;
   updateReferenceImage: (sessionId: string, fileId: string, patch: Partial<ReferenceImageDraft>) => void;
@@ -68,6 +73,7 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
       workspaceCollapsed: false,
       workspaceWidthRatio: DEFAULT_WORKSPACE_RATIO,
       promptDraft: createEmptyPromptDraft(),
+      controlImageBySession: {},
       referenceImagesBySession: {},
       promptDraftBySession: {},
       promptTemplateBySession: {},
@@ -168,6 +174,39 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
           };
         }),
 
+      getControlImage: (sessionId) =>
+        get().controlImageBySession[sessionId] ?? null,
+
+      setControlImage: (sessionId, img) =>
+        set((state) => ({
+          controlImageBySession: {
+            ...state.controlImageBySession,
+            [sessionId]: img,
+          },
+        })),
+
+      updateControlImage: (sessionId, patch) =>
+        set((state) => {
+          const current = state.controlImageBySession[sessionId];
+          if (!current) {
+            return {};
+          }
+          return {
+            controlImageBySession: {
+              ...state.controlImageBySession,
+              [sessionId]: { ...current, ...patch },
+            },
+          };
+        }),
+
+      removeControlImage: (sessionId) =>
+        set((state) => ({
+          controlImageBySession: {
+            ...state.controlImageBySession,
+            [sessionId]: null,
+          },
+        })),
+
       getReferenceImages: (sessionId) =>
         get().referenceImagesBySession[sessionId] ?? [],
 
@@ -220,6 +259,7 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
       skipHydration: true,
       // Persist only session-scoped workspace data; layout remains transient.
       partialize: (state) => ({
+        controlImageBySession: state.controlImageBySession,
         referenceImagesBySession: state.referenceImagesBySession,
         promptDraftBySession: state.promptDraftBySession,
         promptTemplateBySession: state.promptTemplateBySession,

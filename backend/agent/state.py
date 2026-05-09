@@ -37,6 +37,13 @@ class ReferenceImageAnalysis(TypedDict, total=False):
     intent_note: str       # optional user note about the intent
 
 
+class ControlImage(TypedDict, total=False):
+    file_id: str
+    image_url: str
+    note: str
+    sent: bool
+
+
 class PromptDraft(TypedDict, total=False):
     keywords: dict[str, str]
     llm_description: str
@@ -81,6 +88,7 @@ class ImageRecord(TypedDict):
 class AgentState(MessagesState):
     design_state: DesignState
     reference_images: list[ReferenceImageAnalysis]
+    control_image: ControlImage | None
     workspace: PromptDraft | None
     ready_to_generate: bool
     generation_results: list[GenerationResult]
@@ -117,6 +125,7 @@ def default_agent_state() -> dict:
             "completeness": 0.0,
         },
         "reference_images": [],
+        "control_image": None,
         "workspace": {
             "keywords": {},
             "llm_description": "",

@@ -40,6 +40,10 @@ class GrsaiClient(ImageGeneratorBase):
                 "shutProgress": True
             }
 
+        control_image_url = request.control_image_url 
+        if control_image_url:
+            payload["urls"] = [control_image_url]
+
         async with httpx.AsyncClient(timeout=120.0) as client:
             # 关键修改点 1: 使用 stream 上下文管理器
             response = await client.post(self._endpoint, json=payload, headers=headers)

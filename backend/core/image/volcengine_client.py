@@ -23,6 +23,9 @@ class VolcengineClient(ImageGeneratorBase):
             "size": f"{request.width}x{request.height}",
             "response_format": "url",
         }
+        control_image_url = request.control_image_url or request.ref_image_url
+        if control_image_url:
+            payload["image"] = control_image_url
 
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(self._endpoint, headers=headers, json=payload)

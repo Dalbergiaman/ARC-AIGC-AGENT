@@ -73,14 +73,17 @@ export function ChatWorkspace({ sessionId }: Props) {
     workspaceWidthRatio,
     toggleWorkspace,
     setWorkspaceWidthRatio,
+    getControlImage,
     getReferenceImages,
     getPromptDraft,
     promptDraft,
     setSessionPromptDraft,
     setSessionReferenceImages,
+    updateControlImage,
     updateReferenceImage,
   } = useWorkspaceStore();
 
+  const controlImage = getControlImage(sessionId);
   const referenceImages = getReferenceImages(sessionId);
 
   useEffect(() => {
@@ -274,9 +277,20 @@ export function ChatWorkspace({ sessionId }: Props) {
     beginAssistantMessage();
 
     // Build payload — only include images not yet sent
+    const readyControlImage =
+      controlImage && !controlImage.uploading && !controlImage.error && controlImage.url
+        ? controlImage
+        : null;
     const readyImages = referenceImages.filter((img) => !img.uploading && !img.error && img.url && !img.sent);
     const payload = {
       content,
+      ...(readyControlImage && {
+        control_image: {
+          file_id: readyControlImage.fileId,
+          url: readyControlImage.url,
+          note: readyControlImage.note ?? "",
+        },
+      }),
       ...(readyImages.length > 0 && {
         reference_images: readyImages.map((img) => ({
           file_id: img.fileId,
@@ -296,6 +310,9 @@ export function ChatWorkspace({ sessionId }: Props) {
 
     try {
       const response = await submitChatMessage(sessionId, payload);
+      if (readyControlImage) {
+        updateControlImage(sessionId, { sent: true });
+      }
       // Mark submitted images as sent (keep them visible, don't clear)
       readyImages.forEach((img) => updateReferenceImage(sessionId, img.fileId, { sent: true }));
       setStreamId(response.stream_id);

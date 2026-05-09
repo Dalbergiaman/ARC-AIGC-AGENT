@@ -94,6 +94,12 @@ class ReferenceImagePayload(BaseModel):
     note: str = ""
 
 
+class ControlImagePayload(BaseModel):
+    file_id: str
+    url: str
+    note: str = ""
+
+
 class WorkspacePayload(BaseModel):
     keywords: dict[str, str] = Field(default_factory=dict)
     llm_description: str = ""
@@ -105,6 +111,7 @@ class WorkspacePayload(BaseModel):
 class MessageRequest(BaseModel):
     content: str
     reference_images: list[ReferenceImagePayload] = []
+    control_image: ControlImagePayload | None = None
     workspace: WorkspacePayload | None = None
 
 
@@ -141,6 +148,9 @@ async def submit_message(
         if body.reference_images:
             ref_key = f"ref_images:{session_id}:{stream_id}"
             await r.set(ref_key, json.dumps([img.model_dump() for img in body.reference_images]), ex=_RUN_TTL)
+        if body.control_image is not None:
+            control_key = f"control_image:{session_id}:{stream_id}"
+            await r.set(control_key, json.dumps(body.control_image.model_dump()), ex=_RUN_TTL)
         if body.workspace and any(
             [
                 body.workspace.keywords,
@@ -266,12 +276,13 @@ async def _generate_sse(
 
         # Read reference images and workspace draft stored by submit_message
         ref_images_raw = await r.get(f"ref_images:{session_id}:{stream_id}")
+        control_image_raw = await r.get(f"control_image:{session_id}:{stream_id}")
         workspace_raw = await r.get(f"workspace:{session_id}:{stream_id}")
+        base = str(request.base_url).rstrip("/")
 
         # Pre-fill reference_images in input_state (url + intent/note; description filled by agent_node)
         pending_ref_images: list[dict] = []
         if ref_images_raw:
-            base = str(request.base_url).rstrip("/")
             for img in json.loads(ref_images_raw):
                 url = img["url"]
                 # Convert relative paths to absolute so VLM can fetch the image
@@ -300,6 +311,17 @@ async def _generate_sse(
         }
         if pending_ref_images:
             input_state["reference_images"] = pending_ref_images
+        if control_image_raw:
+            control_image = json.loads(control_image_raw)
+            control_url = control_image.get("url", "")
+            if control_url.startswith("/"):
+                control_url = f"{base}{control_url}"
+            input_state["control_image"] = {
+                "file_id": control_image.get("file_id", ""),
+                "image_url": control_url,
+                "note": control_image.get("note", ""),
+                "sent": True,
+            }
         if workspace_raw:
             input_state["workspace"] = json.loads(workspace_raw)
 
@@ -317,6 +339,7 @@ async def _generate_sse(
             "run_id": stream_id,
             "history_count": len(lc_messages),
             "reference_image_count": len(pending_ref_images),
+            "has_control_image": bool(control_image_raw),
             "has_workspace_prompt": bool(workspace_raw),
         }
 
