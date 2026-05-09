@@ -1510,7 +1510,7 @@ backend/tests/
 - [x] 将已上传/已发送参考图写入 `reference_images` 表，`analysis` JSON 保存 VLM 分析、`intent`、`note`、`sent` 等；前端参考图列表刷新后从后端恢复
 - [x] 将生成任务/结果写入 PostgreSQL：保存 task_id、prompt、negative_prompt、image_url、provider、status、score、raw_response，供 E-4 生成图片区刷新后恢复
 - [x] 明确删除会话时级联删除 workspace_state、reference_images、generation_tasks；保留 localStorage 清理作为前端辅助
-- [ ] 验证跨浏览器/清空 localStorage 后，历史消息、prompt 草稿、已发送参考图、生成图结果仍可按 session 恢复
+- [x] 验证跨浏览器/清空 localStorage 后，历史消息、prompt 草稿、已发送参考图、生成图结果仍可按 session 恢复
 
 **E-4 生成图片工作区、批注与下载**
 
@@ -1519,7 +1519,7 @@ backend/tests/
 - [ ] 实现下载按钮；跨域下载失败时记录问题，后续补后端代理下载接口
 - [ ] 编写 `ImageAnnotationCanvas.tsx`：画笔、撤销、清空、导出批注图
 - [ ] 批注图首版作为新参考图走 `POST /api/upload`，再随下一条消息发送给 Agent；独立 `POST /api/annotations` 可后续补
-- [ ] 生成完成后展示"存入图库"按钮，用户确认后调用 `POST /api/library/store`，后端直接调用 MCP `store_generated_image`，不经过 Agent
+- [ ] 生成完成后展示"存入图库"按钮；E-4 先做 UI 占位/禁用状态，待 D 阶段完成 `image-rag-mcp` 与 `POST /api/library/store` 后再接入真实调用。真实接入时后端直接调用 MCP `store_generated_image`，不经过 Agent
 
 **E-5 全流程联调**
 
@@ -1532,7 +1532,7 @@ backend/tests/
 
 ## 当前状态
 
-**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 临时持久化；E-3 已完成 prompt 实时同步与风格模板独立注入，参数滑块因缺少跨平台通用 API 字段暂缓；E-3.5 已完成会话工作区服务端持久化，下一步进入 E-4 生成图片工作区。
+**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 临时持久化；E-3 已完成 prompt 实时同步与风格模板独立注入，参数滑块因缺少跨平台通用 API 字段暂缓；E-3.5 已完成会话工作区服务端持久化并通过跨浏览器恢复验证；当前进入 E-4 生成图片工作区。
 
 **建议执行顺序（2026-05-08 调整）**：
 1. ~~C-6.1~~、~~C-8~~、~~E-1~~：已完成。
@@ -1544,6 +1544,7 @@ backend/tests/
 7. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-09：E-3.5 跨浏览器恢复已人工验证通过：换浏览器后可按 session 恢复历史消息和 prompt 草稿。E-4 先实现不依赖 D 阶段的生成图展示、下载、批注与批注图作为参考图回传；“存入图库”按钮在 E-4 仅做 UI 占位/禁用提示，待 D 阶段完成 `image-rag-mcp`、图库存储表和 `POST /api/library/store` 后再接入真实调用。接入时由后端路由直接调用 MCP `store_generated_image`，不经过 Agent。
 - 2026-05-09：图生图输入从“取最后一张参考图”调整为“单 `control_image` + 多 `reference_images`”。`control_image` 是唯一结构底图，用于约束建筑体量、透视关系、空间尺度和主要构图，并且是唯一进入图像生成 provider API 的图片输入；`reference_images` 只作为语义参考，经 VLM 分析后注入 Agent / Prompt / 评估，不进入 provider 请求体。生成请求统一只传 `control_image_url`，百炼走 `messages[].content[].image`，火山走 `image` 字段，GrsAI 走 `urls=[control_image_url]`。
 - 2026-05-09：修复前端 `localStorage` 恢复时序问题：`localStorage` 正常刷新不会清空；此前 `workspaceStore` 使用 Zustand `skipHydration: true`，但 `ChatWorkspace` 在 `rehydrate()` 完成前加载 session 并调用 `getPromptDraft(sessionId)`，会读到空的 `promptDraftBySession` 并把空草稿写回当前 session，表现为刷新后模板和已生成 prompt 消失。现改为等待 `useWorkspaceStore.persist.rehydrate()` 完成后再加载 session 并恢复 prompt 草稿，同时移除 `PromptReferenceTab` 内重复恢复逻辑，避免组件 mount 顺序互相覆盖。
 - 2026-05-09：决定新增 E-3.5 作为 E-4 前置阶段：当前 `localStorage` 只能恢复同一浏览器的参考图和 prompt 草稿，不满足历史 session 的服务端恢复语义。E-3.5 目标是把会话业务状态迁移到 PostgreSQL：结构化 prompt 草稿存 `sessions.workspace_state` 或等价 JSON；参考图 `intent/note/sent/analysis` 存 `reference_images.analysis`；生成任务结果存 `generation_tasks` 或扩展表。`localStorage` 后续只保留布局偏好、未同步草稿兜底和临时 UI 状态。这个阶段应在 E-4 之前完成，因为 E-4 的生成图片工作区依赖生成结果刷新恢复能力，否则会返工。
