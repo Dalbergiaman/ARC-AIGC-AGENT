@@ -53,6 +53,7 @@ type WorkspaceStore = {
   updateReferenceImage: (sessionId: string, fileId: string, patch: Partial<ReferenceImageDraft>) => void;
   removeReferenceImage: (sessionId: string, fileId: string) => void;
   clearSessionReferenceImages: (sessionId: string) => void;
+  setSessionReferenceImages: (sessionId: string, images: ReferenceImageDraft[]) => void;
 };
 
 function clampWorkspaceWidthRatio(ratio: number): number {
@@ -203,6 +204,14 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
           referenceImagesBySession: {
             ...state.referenceImagesBySession,
             [sessionId]: [],
+          },
+        })),
+
+      setSessionReferenceImages: (sessionId, images) =>
+        set((state) => ({
+          referenceImagesBySession: {
+            ...state.referenceImagesBySession,
+            [sessionId]: images,
           },
         })),
     }),

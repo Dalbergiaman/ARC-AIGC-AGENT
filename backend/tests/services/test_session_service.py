@@ -58,6 +58,43 @@ class TestSessionService(unittest.IsolatedAsyncioTestCase):
         db.commit.assert_awaited_once()
         db.refresh.assert_awaited_once_with(session)
 
+    async def test_update_workspace_state_commits_and_refreshes_session(self):
+        session = SimpleNamespace(id=uuid.uuid4(), workspace_state=None)
+        db = SimpleNamespace(commit=AsyncMock(), refresh=AsyncMock())
+
+        with patch.object(session_service, "get_session", AsyncMock(return_value=session)) as mocked_get:
+            updated = await session_service.update_workspace_state(db, session.id, {"custom_description": "abc"})
+
+        self.assertIs(updated, session)
+        self.assertEqual(session.workspace_state, {"custom_description": "abc"})
+        mocked_get.assert_awaited_once_with(db, session.id)
+        db.commit.assert_awaited_once()
+        db.refresh.assert_awaited_once_with(session)
+
+    async def test_list_reference_images_returns_query_result(self):
+        item = SimpleNamespace(id=uuid.uuid4())
+        scalar_result = SimpleNamespace(all=lambda: [item])
+        db = SimpleNamespace(
+            execute=AsyncMock(return_value=SimpleNamespace(scalars=lambda: scalar_result))
+        )
+
+        result = await session_service.list_reference_images(db, uuid.uuid4())
+
+        self.assertEqual(result, [item])
+        db.execute.assert_awaited_once()
+
+    async def test_list_generation_tasks_returns_query_result(self):
+        item = SimpleNamespace(id=uuid.uuid4())
+        scalar_result = SimpleNamespace(all=lambda: [item])
+        db = SimpleNamespace(
+            execute=AsyncMock(return_value=SimpleNamespace(scalars=lambda: scalar_result))
+        )
+
+        result = await session_service.list_generation_tasks(db, uuid.uuid4())
+
+        self.assertEqual(result, [item])
+        db.execute.assert_awaited_once()
+
     async def test_delete_session_returns_false_when_missing(self):
         db = SimpleNamespace(execute=AsyncMock(), commit=AsyncMock())
 

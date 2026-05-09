@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -30,8 +31,10 @@ from core.observability import (
     update_current_span,
 )
 from models.database import get_session
+from models.schemas import GenerationTask
 from services.message_service import add_message, get_messages
 from services.session_service import get_session as get_db_session
+from services.session_service import create_generation_task, update_workspace_state, upsert_reference_images
 from services.session_title_service import maybe_generate_session_title
 
 router = APIRouter(prefix="/api/chat")
@@ -149,6 +152,25 @@ async def submit_message(
         ):
             ws_key = f"workspace:{session_id}:{stream_id}"
             await r.set(ws_key, json.dumps(body.workspace.model_dump()), ex=_RUN_TTL)
+            await update_workspace_state(db, session_id, body.workspace.model_dump())
+
+        if body.reference_images:
+            await upsert_reference_images(
+                db,
+                session_id,
+                [
+                    {
+                        "file_id": img.file_id,
+                        "url": img.url,
+                        "analysis": {
+                            "intent": img.intent,
+                            "note": img.note,
+                            "sent": True,
+                        },
+                    }
+                    for img in body.reference_images
+                ],
+            )
     finally:
         await r.aclose()
 
@@ -256,6 +278,7 @@ async def _generate_sse(
                 if url.startswith("/"):
                     url = f"{base}{url}"
                 pending_ref_images.append({
+                    "file_id": img.get("file_id", ""),
                     "image_url": url,
                     "reference_intent": img.get("intent", ""),
                     "intent_note": img.get("note", ""),
@@ -306,38 +329,125 @@ async def _generate_sse(
             set_current_trace_io(input=latest_user)
             update_current_span(metadata=turn_metadata)
 
-            async for chunk in stream_agent_events(graph, config, input_state):
-                event_type, data = _parse_sse_chunk(chunk)
-                if should_persist_assistant and event_type == "text_delta":
-                    content = data.get("content")
-                    if isinstance(content, str):
-                        assistant_text_parts.append(content)
+        async for chunk in stream_agent_events(graph, config, input_state):
+            event_type, data = _parse_sse_chunk(chunk)
+            if should_persist_assistant and event_type == "text_delta":
+                content = data.get("content")
+                if isinstance(content, str):
+                    assistant_text_parts.append(content)
 
-                # Buffer for reconnection
-                await _buffer_event(r, buffer_key, chunk)
-                yield chunk
+            if event_type == "prompt_update" and isinstance(data, dict):
+                await update_workspace_state(db, session_id, {
+                    "keywords": data.get("keywords", {}),
+                    "llm_description": data.get("llm_description", ""),
+                    "custom_description": data.get("custom_description", ""),
+                    "negative_prompt": data.get("negative_prompt", ""),
+                    "prompt_template": data.get("prompt_template"),
+                })
 
-                if should_persist_assistant and event_type == "done":
-                    assistant_text = "".join(assistant_text_parts).strip()
-                    if assistant_text:
-                        reply_text = _extract_reply(assistant_text) or assistant_text
-                        set_current_trace_io(output=message_preview(reply_text))
-                        update_current_span(
-                            output=message_preview(reply_text),
-                            metadata={"finish_reason": data.get("finish_reason", "stop")},
-                        )
-                        await add_message(db, session_id, "assistant", reply_text)
-                        try:
-                            await maybe_generate_session_title(db, session_id)
-                        except Exception:
-                            pass
-                    await _clear_active_run(r, session_id, stream_id)
-                    should_persist_assistant = False
+            if event_type == "reference_image_update" and isinstance(data.get("image_url"), str):
+                analysis = dict(data)
+                await upsert_reference_images(
+                    db,
+                    session_id,
+                    [
+                        {
+                            "file_id": str(data.get("file_id") or data.get("image_url")),
+                            "url": str(data.get("image_url")),
+                            "analysis": {
+                                **analysis,
+                                "intent": data.get("reference_intent", ""),
+                                "note": data.get("intent_note", ""),
+                                "sent": True,
+                            },
+                        }
+                    ],
+                )
+                continue
 
-                # Honour client disconnect
-                if await request.is_disconnected():
-                    update_current_span(level="WARNING", status_message="client disconnected")
-                    break
+            if event_type == "generation_start" and isinstance(data.get("task_id"), str):
+                workspace_payload = json.loads(workspace_raw) if workspace_raw else {}
+                await create_generation_task(
+                    db,
+                    session_id,
+                    task_id=str(data.get("task_id")),
+                    prompt=str(workspace_payload.get("llm_description") or workspace_payload.get("custom_description") or ""),
+                    negative_prompt=str(workspace_payload.get("negative_prompt") or "") or None,
+                    provider=None,
+                    status="running",
+                )
+
+            if event_type == "generation_done" and isinstance(data.get("task_id"), str):
+                result = await db.execute(
+                    select(GenerationTask)
+                    .where(GenerationTask.session_id == session_id)
+                    .where(GenerationTask.task_id == str(data.get("task_id")))
+                    .order_by(GenerationTask.created_at.desc())
+                    .limit(1)
+                )
+                task_row = result.scalar_one_or_none()
+                if task_row is not None:
+                    task_row.image_url = str(data.get("image_url") or task_row.image_url)
+                    task_row.status = "done"
+                    await db.commit()
+
+            if event_type == "generation_done" and isinstance(data.get("prompt"), str):
+                result = await db.execute(
+                    select(GenerationTask)
+                    .where(GenerationTask.session_id == session_id)
+                    .where(GenerationTask.task_id == str(data.get("task_id")))
+                    .order_by(GenerationTask.created_at.desc())
+                    .limit(1)
+                )
+                task_row = result.scalar_one_or_none()
+                if task_row is None:
+                    await create_generation_task(
+                        db,
+                        session_id,
+                        task_id=str(data.get("task_id")),
+                        prompt=str(data.get("prompt") or ""),
+                        negative_prompt=str(data.get("negative_prompt") or "") or None,
+                        provider=str(data.get("provider") or "") or None,
+                        image_url=str(data.get("image_url") or "") or None,
+                        status=str(data.get("status") or "done"),
+                        score=data.get("score") if isinstance(data.get("score"), (int, float)) else None,
+                        raw_response=data.get("raw_response") if isinstance(data.get("raw_response"), dict) else None,
+                    )
+                else:
+                    task_row.prompt = str(data.get("prompt") or task_row.prompt)
+                    task_row.negative_prompt = str(data.get("negative_prompt") or "") or task_row.negative_prompt
+                    task_row.provider = str(data.get("provider") or "") or task_row.provider
+                    task_row.image_url = str(data.get("image_url") or "") or task_row.image_url
+                    task_row.status = str(data.get("status") or task_row.status)
+                    task_row.score = data.get("score") if isinstance(data.get("score"), (int, float)) else task_row.score
+                    task_row.raw_response = data.get("raw_response") if isinstance(data.get("raw_response"), dict) else task_row.raw_response
+                    await db.commit()
+
+            # Buffer for reconnection
+            await _buffer_event(r, buffer_key, chunk)
+            yield chunk
+
+            if should_persist_assistant and event_type == "done":
+                assistant_text = "".join(assistant_text_parts).strip()
+                if assistant_text:
+                    reply_text = _extract_reply(assistant_text) or assistant_text
+                    set_current_trace_io(output=message_preview(reply_text))
+                    update_current_span(
+                        output=message_preview(reply_text),
+                        metadata={"finish_reason": data.get("finish_reason", "stop")},
+                    )
+                    await add_message(db, session_id, "assistant", reply_text)
+                    try:
+                        await maybe_generate_session_title(db, session_id)
+                    except Exception:
+                        pass
+                await _clear_active_run(r, session_id, stream_id)
+                should_persist_assistant = False
+
+            # Honour client disconnect
+            if await request.is_disconnected():
+                update_current_span(level="WARNING", status_message="client disconnected")
+                break
 
     finally:
         await r.aclose()

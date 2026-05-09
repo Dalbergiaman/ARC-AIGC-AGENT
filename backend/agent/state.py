@@ -46,6 +46,7 @@ class PromptDraft(TypedDict, total=False):
 
 
 class GenerationResult(TypedDict, total=False):
+    task_id: str
     image_url: str
     provider: str
     generation_time: float

@@ -57,11 +57,14 @@ export type SessionResponse = {
   id: string;
   title: string;
   design_state: Record<string, unknown> | null;
+  workspace_state?: PromptDraft | null;
   created_at?: string;
 };
 
 export type SessionDetailResponse = SessionResponse & {
   messages: ChatMessage[];
+  reference_images?: SessionReferenceImage[];
+  generation_tasks?: SessionGenerationTask[];
 };
 
 export type ChatMessage = {
@@ -79,6 +82,8 @@ export type GenerationPreview = {
   taskId: string;
   imageUrl: string;
   runId?: string;
+  score?: number | null;
+  provider?: string | null;
 };
 
 export type StyleTemplate = {
@@ -133,6 +138,43 @@ export type ReferenceImageDraft = {
   uploading?: boolean;
   error?: string;
   sent?: boolean;  // true after the image has been submitted in a message
+  analysis?: Record<string, unknown> | null;
+};
+
+export type SessionReferenceImage = {
+  id: string;
+  file_id: string;
+  url: string;
+  analysis?: {
+    image_url?: string;
+    building_type?: string;
+    style?: string;
+    facade_material?: string;
+    lighting?: string;
+    viewpoint?: string;
+    color_palette?: string;
+    description?: string;
+    reference_intent?: ReferenceIntent;
+    intent_note?: string;
+    file_id?: string;
+    intent?: ReferenceIntent;
+    note?: string;
+    sent?: boolean;
+  } | null;
+  created_at?: string;
+};
+
+export type SessionGenerationTask = {
+  id: string;
+  task_id?: string | null;
+  prompt: string;
+  negative_prompt?: string | null;
+  provider?: string | null;
+  image_url?: string | null;
+  status: string;
+  score?: number | null;
+  raw_response?: Record<string, unknown> | null;
+  created_at?: string;
 };
 
 export type SubmitMessagePayload = {

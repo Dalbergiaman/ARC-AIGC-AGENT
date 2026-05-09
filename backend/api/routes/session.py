@@ -7,7 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.database import get_session as get_db
 from services.message_service import get_messages
-from services.session_service import create_session, delete_session, get_session, list_sessions
+from services.session_service import (
+    create_session,
+    delete_session,
+    get_session,
+    list_generation_tasks,
+    list_reference_images,
+    list_sessions,
+)
 
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -17,6 +24,7 @@ class SessionResponse(BaseModel):
     id: uuid.UUID
     title: str = "Unnamed Chat"
     design_state: dict | None
+    workspace_state: dict | None = None
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
@@ -31,8 +39,35 @@ class MessageResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ReferenceImageResponse(BaseModel):
+    id: uuid.UUID
+    file_id: str
+    url: str
+    analysis: dict | None = None
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class GenerationTaskResponse(BaseModel):
+    id: uuid.UUID
+    task_id: str | None = None
+    prompt: str
+    negative_prompt: str | None = None
+    provider: str | None = None
+    image_url: str | None = None
+    status: str
+    score: float | None = None
+    raw_response: dict | None = None
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class SessionDetailResponse(SessionResponse):
     messages: list[MessageResponse]
+    reference_images: list[ReferenceImageResponse] = []
+    generation_tasks: list[GenerationTaskResponse] = []
 
 
 @router.post("", response_model=SessionResponse, status_code=201)
@@ -55,9 +90,13 @@ async def get_session_detail(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     messages = await get_messages(db, session_id, limit=100)
+    reference_images = await list_reference_images(db, session_id)
+    generation_tasks = await list_generation_tasks(db, session_id)
     return SessionDetailResponse(
         **SessionResponse.model_validate(session).model_dump(),
         messages=[MessageResponse.model_validate(message) for message in messages],
+        reference_images=[ReferenceImageResponse.model_validate(item) for item in reference_images],
+        generation_tasks=[GenerationTaskResponse.model_validate(item) for item in generation_tasks],
     )
 
 

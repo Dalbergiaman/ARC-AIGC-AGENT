@@ -1509,13 +1509,13 @@ backend/tests/
 
 ## 当前状态
 
-**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 临时持久化；E-3 已完成 prompt 实时同步与风格模板独立注入，参数滑块因缺少跨平台通用 API 字段暂缓。下一步：E-3.5 会话工作区服务端持久化，完成后再进入 E-4 生成图片工作区。
+**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 临时持久化；E-3 已完成 prompt 实时同步与风格模板独立注入，参数滑块因缺少跨平台通用 API 字段暂缓；E-3.5 已完成会话工作区服务端持久化，下一步进入 E-4 生成图片工作区。
 
 **建议执行顺序（2026-05-08 调整）**：
 1. ~~C-6.1~~、~~C-8~~、~~E-1~~：已完成。
 2. ~~E-2~~：已完成参考图列表按 sessionId 存 localStorage，刷新/切换 session 后恢复。
 3. ~~E-3~~：已完成 `prompt_update` SSE、结构化 prompt 草稿与风格模板 `prompt_template` 注入；参数滑块暂缓。
-4. E-3.5：将 prompt 草稿、参考图会话状态、生成任务结果从 `localStorage` / 前端内存迁移到 PostgreSQL；这是 E-4 前置，避免生成图工作区做完后因刷新恢复能力返工。
+4. ~~E-3.5~~：已完成将 prompt 草稿、参考图会话状态、生成任务结果从 `localStorage` / 前端内存迁移到 PostgreSQL；这是 E-4 前置，避免生成图工作区做完后因刷新恢复能力返工。
 5. E-4 ~ E-5：生成图批注下载、存入图库、全流程联调。
 6. D-1 ~ D-4：image-rag-mcp 图库、Milvus/PG 存储与检索，替换 `search_similar_cases` stub。
 7. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
@@ -1525,6 +1525,7 @@ backend/tests/
 - 2026-05-09：决定新增 E-3.5 作为 E-4 前置阶段：当前 `localStorage` 只能恢复同一浏览器的参考图和 prompt 草稿，不满足历史 session 的服务端恢复语义。E-3.5 目标是把会话业务状态迁移到 PostgreSQL：结构化 prompt 草稿存 `sessions.workspace_state` 或等价 JSON；参考图 `intent/note/sent/analysis` 存 `reference_images.analysis`；生成任务结果存 `generation_tasks` 或扩展表。`localStorage` 后续只保留布局偏好、未同步草稿兜底和临时 UI 状态。这个阶段应在 E-4 之前完成，因为 E-4 的生成图片工作区依赖生成结果刷新恢复能力，否则会返工。
 - 2026-05-09：修复 E-3 prompt 草稿刷新丢失问题：此前只有参考图和 `prompt_template` 按 `sessionId` 持久化，完整结构化草稿仍是内存状态，关闭网页后 `keywords` / `llm_description` / `custom_description` / `negative_prompt` 会丢失。现调整 `workspaceStore`，新增 `promptDraftBySession` 并持久化到 `localStorage`；SSE `prompt_update`、用户编辑 `custom_description` / `negative_prompt`、重置草稿和风格模板选择都会同步写入对应 session。进入会话时从 `promptDraftBySession[sessionId]` 恢复整份 JSON 草稿，保持历史对话与右侧 prompt 状态一致。后端 Agent 状态仍为权威决策状态，本阶段不新增数据库 schema。
 - 2026-05-09：E-3 后半完成风格模板独立注入：后端新增 `GET /api/styles/templates`，直接从 `prompt_templates.py` 暴露模板；前端右侧 Prompt 工作区新增风格模板下拉，选择后只写入结构化草稿的 `prompt_template` 字段，不覆盖 `keywords` / `llm_description` / `custom_description` / `negative_prompt`。`prompt_template` 按 `sessionId` 存 `localStorage`，随下一条消息通过 `workspace` payload 传给 Agent；`agent_system` / `enhance_prompt_system` 将其作为额外上下文使用，并明确不得覆盖用户已明确提供的字段。`prompt_update` SSE 继续保留当前模板，避免 Agent 刷新草稿时清空用户选择。参数滑块本阶段暂缓，原因是 `temperature` / `lightingIntensity` / `stylization` / `materialStrength` / `compositionStrength` 不是百炼、火山、GrsAI 三家图像生成 API 的通用字段；后续如需真实参数控制，应按 provider 能力单独设计。
+- 2026-05-09：E-3.5 完成会话工作区服务端持久化：`sessions.workspace_state` 作为 prompt 草稿主存储，`reference_images.analysis` 保存参考图分析/意图/发送状态，`generation_tasks` 扩展保存 task_id、prompt、negative_prompt、provider、score、raw_response；`GET /api/sessions/{session_id}` 现在返回 workspace、reference_images、generation_tasks，前端进入历史会话时优先用 PostgreSQL 恢复，`localStorage` 只保留布局偏好和未同步草稿兜底。E-4 可以在此基础上继续做生成图片区刷新恢复。
 - 2026-05-08：修复聊天工作台页面级滚动问题：`ChatWorkspace` 使用 `fixed inset-0` + `overflow-hidden` 固定为全视口工作台；中栏 `ChatPanel` 使用 `grid-rows-[72px_minmax(0,1fr)_auto]`，只有 `MessageList` 所在中间行独立滚动，输入栏始终固定在中栏底部；右栏 `WorkspacePanel` 固定高度并仅内容区域独立滚动，header 固定。
 - 2026-05-08：修复偶发 `asyncpg InterfaceError: connection is closed`：后端 SQLAlchemy async engine 开启 `pool_pre_ping=True` 与 `pool_recycle=1800`，避免连接池复用被 PostgreSQL/Docker/网络关闭的旧连接。该问题发生在普通请求拿 session 查询时，根因属于连接池健康检查缺失，不在业务 service 层做散乱重试。
 - 2026-05-08：修复 `agent_node` 自动决策生成图片的问题：新增后端显式生成意图硬规则，只检查最新用户消息，支持中文“生成 / 生成图片 / 开始生成 / 开始出图 / 出图 / 渲染”等和英文 `generate / render / create image` 等命令；“不要生成 / 先不生成 / 别出图 / do not generate”等否定表达优先拦截。`agent_node` 继续让 LLM 更新 `DesignState`，但最终 `ready_to_generate` 只由该硬规则决定，LLM 返回 `phase=generating` 且用户未明确生成时会被覆盖为 `collecting`。同步更新 `agent_system` 提示词，去掉“信息完整度够即可生成”的指令。

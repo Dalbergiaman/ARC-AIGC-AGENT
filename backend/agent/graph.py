@@ -243,10 +243,15 @@ async def agent_node(state: AgentState) -> dict:
         analysis = await analyze_reference_image.ainvoke({"image_url": url})
         # Merge user-annotated intent/note from any pre-filled entry for this URL
         pre = next((r for r in reference_images if r.get("image_url") == url), {})
+        if pre.get("file_id"):
+            analysis["file_id"] = pre["file_id"]
         if pre.get("reference_intent"):
             analysis["reference_intent"] = pre["reference_intent"]
         if pre.get("intent_note"):
             analysis["intent_note"] = pre["intent_note"]
+        emitter = get_current_emitter()
+        if emitter is not None:
+            await emitter.emit("reference_image_update", analysis)
         # Replace the pre-filled stub (or append if new)
         reference_images = [r for r in reference_images if r.get("image_url") != url]
         reference_images.append(analysis)
@@ -522,6 +527,7 @@ async def generate_image_node(state: AgentState) -> dict:
 
     generation_results = list(state.get("generation_results") or [])
     generation_results.append(gen_result)
+    workspace = dict(state.get("workspace") or {})
 
     update_current_span(
         output={
@@ -535,6 +541,17 @@ async def generate_image_node(state: AgentState) -> dict:
         "generation_results": generation_results,
         "phase": "evaluating",
         "_current_gen_result": gen_result,
+        "_current_generation_persist": {
+            "task_id": gen_result.get("task_id"),
+            "prompt": enhanced_prompt.prompt,
+            "negative_prompt": enhanced_prompt.negative_prompt,
+            "provider": gen_result.get("provider"),
+            "image_url": gen_result.get("image_url"),
+            "status": "done",
+            "score": gen_result.get("score"),
+            "raw_response": gen_result.get("raw_response", {}),
+            "workspace": workspace,
+        },
     }
 
 
@@ -561,6 +578,20 @@ async def evaluate_image_node(state: AgentState) -> dict:
     best = state.get("best_generation_result")
     if best is None or scored["score"] > best.get("score", 0):
         best = scored
+    persist_payload = dict(state.get("_current_generation_persist") or {})
+    persist_payload.update(
+        {
+            "score": evaluation["score"],
+            "status": "done",
+            "raw_response": {
+                **(persist_payload.get("raw_response") or {}),
+                "evaluation": evaluation,
+            },
+        }
+    )
+    emitter = get_current_emitter()
+    if emitter is not None:
+        await emitter.emit("generation_done", persist_payload)
 
     update_current_span(
         input={

@@ -112,6 +112,7 @@ async def generate_image(
             if result.successful():
                 data = result.get()
                 gen_result: GenerationResult = {
+                    "task_id": task.id,
                     "image_url": data["image_url"],
                     "provider": data["provider"],
                     "generation_time": data["generation_time"],

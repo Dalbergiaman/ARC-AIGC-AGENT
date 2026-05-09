@@ -60,6 +60,7 @@ export function ChatWorkspace({ sessionId }: Props) {
     setStreamState,
     setToolStatus,
     upsertGenerationPreview,
+    setGenerationPreviews,
     setErrorMessage,
     resetConversation,
   } = useChatStore();
@@ -76,6 +77,7 @@ export function ChatWorkspace({ sessionId }: Props) {
     getPromptDraft,
     promptDraft,
     setSessionPromptDraft,
+    setSessionReferenceImages,
     updateReferenceImage,
   } = useWorkspaceStore();
 
@@ -123,7 +125,39 @@ export function ChatWorkspace({ sessionId }: Props) {
         }
         setMessages(sessionDetail.messages ?? []);
         setSessions(sessionItems);
-        setSessionPromptDraft(sessionId, getPromptDraft(sessionId));
+        if (sessionDetail.workspace_state) {
+          setSessionPromptDraft(sessionId, {
+            keywords: sessionDetail.workspace_state.keywords ?? {},
+            llm_description: sessionDetail.workspace_state.llm_description ?? "",
+            custom_description: sessionDetail.workspace_state.custom_description ?? "",
+            negative_prompt: sessionDetail.workspace_state.negative_prompt ?? "",
+            prompt_template: sessionDetail.workspace_state.prompt_template ?? null,
+          });
+        } else {
+          setSessionPromptDraft(sessionId, getPromptDraft(sessionId));
+        }
+        setSessionReferenceImages(
+          sessionId,
+          (sessionDetail.reference_images ?? []).map((item) => ({
+            fileId: item.file_id,
+            url: item.url,
+            intent: item.analysis?.reference_intent ?? "composition",
+            note: typeof item.analysis?.intent_note === "string" ? item.analysis.intent_note : "",
+            sent: Boolean(item.analysis?.sent),
+            analysis: item.analysis ?? null,
+          })),
+        );
+        setGenerationPreviews(
+          (sessionDetail.generation_tasks ?? [])
+            .filter((item) => Boolean(item.image_url))
+            .map((item) => ({
+              taskId: item.task_id ?? item.id,
+              imageUrl: item.image_url ?? "",
+              runId: undefined,
+              score: item.score ?? null,
+              provider: item.provider ?? null,
+            })),
+        );
       } catch (error) {
         if (!active) {
           return;
@@ -149,6 +183,8 @@ export function ChatWorkspace({ sessionId }: Props) {
     setMessages,
     setSessionId,
     setSessionPromptDraft,
+    setSessionReferenceImages,
+    setGenerationPreviews,
     workspaceHydrated,
   ]);
 

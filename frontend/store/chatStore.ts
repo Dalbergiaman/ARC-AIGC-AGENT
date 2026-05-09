@@ -23,6 +23,7 @@ type ChatStore = {
   setStreamState: (state: StreamState) => void;
   setToolStatus: (status: ToolStatus | null) => void;
   upsertGenerationPreview: (preview: GenerationPreview) => void;
+  setGenerationPreviews: (previews: GenerationPreview[]) => void;
   setErrorMessage: (message: string | null) => void;
   resetConversation: () => void;
 };
@@ -136,6 +137,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       next[existing] = { ...next[existing], ...preview };
       return { generationPreviews: next };
     }),
+  setGenerationPreviews: (generationPreviews) => set({ generationPreviews }),
   setErrorMessage: (errorMessage) => set({ errorMessage }),
   resetConversation: () =>
     set({
