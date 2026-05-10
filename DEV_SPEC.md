@@ -131,12 +131,11 @@ aigc_agent/
     │   ├── prompts.py                  # 所有节点/工具的 Prompt 函数，本地版本管理（git）
     │   └── tools/
     │       ├── image_analysis.py       # analyze_reference_image — 视觉 LLM 分析参考图
-    │       ├── style_lookup.py         # lookup_style_keywords — 查询风格关键词库
     │       ├── prompt_builder.py       # enhance_prompt + refine_prompt — Prompt 构建与修正
     │       ├── image_generator.py      # generate_image — 调用 core/image/generator
     │       ├── image_evaluator.py      # evaluate_generated_image — 视觉 LLM 评估生成结果
     │       ├── search_library.py       # search_similar_cases — 调用 image-rag-mcp 检索
-    │       └── prompt_templates.py     # 纯数据文件：风格关键词库，被 style_lookup/prompt_builder 引用
+    │       └── prompt_templates.py     # 纯数据文件：9 种风格关键词库，供 /api/styles/templates 与 agent_system 建议提示使用
     ├── core/
     │   ├── llm/
     │   │   ├── base.py                 # 抽象基类 LLMClientBase
@@ -333,7 +332,8 @@ Agent 不完全依赖 ReAct 自由调用完整生成链路。单一 `agent` 节�
 
 - `store_generated_image` 不是 Agent 工具，由前端图片卡片下方的「存入图库」按钮触发，调用独立 REST 接口 `POST /api/library/store`，后端直接调 MCP，不经过 Agent。
 - 每轮用户消息创建新的 `turn_id` 和 `run_id`；`retry_count`、`best_generation_result`、`current_task_id` 只作用于当前生成任务，新生成意图开始时重置。
-- `agent` 可自主调用轻量工具（如 `analyze_reference_image`、`lookup_style_keywords`、`search_similar_cases`），但图像生成、评估、重试由确定性子流程控制。
+- `agent` 可自主调用轻量工具（如 `analyze_reference_image`、`search_similar_cases`），但图像生成、评估、重试由确定性子流程控制。
+- 风格关键词不再由 Agent 自动注入：`agent_node` 不再根据 `design_state.style` 自动查库注入，`enhance_prompt` 也不再反查。风格模板只通过前端用户显式选择的 `prompt_template` 注入到 `agent_system` 与 `enhance_prompt_system`；用户未选时 `agent_system` 仅展示可用模板列表，允许 LLM 在 `reply` 中口头建议用户在右侧选择。
 - 图像生成入口由后端显式用户意图规则硬把关：只有用户最新一轮消息明确要求生成 / 出图 / 渲染（含 generate / render / create image 等英文命令）时，才允许 `ready_to_generate` 进入生成子流程；LLM 输出的 `ready_to_generate` 不能单独触发生成，且“不要生成 / 先不生成 / do not generate”等否定表达优先拦截。
 - 所有会影响控制流的 LLM 输出必须通过 Pydantic schema 校验；解析失败时返回可恢复错误或走保守兜底。
 
@@ -342,12 +342,13 @@ Agent 不完全依赖 ReAct 自由调用完整生成链路。单一 `agent` 节�
 | 工具 | 输入 | 输出 | 调用时机 |
 |------|------|------|----------|
 | `analyze_reference_image` | image_url | ReferenceImageAnalysis | 用户上传参考图后 |
-| `lookup_style_keywords` | style: str | StyleKeywords | 需要风格关键词时 |
 | `search_similar_cases` | query, filters | list[ImageRecord] | agent 信息收集阶段，RAG 参考 |
-| `enhance_prompt` | design_state, reference_analysis, similar_cases | EnhancedPrompt | 信息充分，首次生成前 |
+| `enhance_prompt` | design_state, reference_analysis, similar_cases, prompt_template | EnhancedPrompt | 信息充分，首次生成前 |
 | `generate_image` | enhanced_prompt, ref_image_url | GenerationResult | 每次触发生成 |
 | `evaluate_generated_image` | image_url, design_state, reference_images | EvaluationResult | 每次生成后自动评估 |
 | `refine_prompt` | original_prompt, evaluation | EnhancedPrompt | 评估不满意时修正 |
+
+> 历史工具 `lookup_style_keywords` 已于 2026-05-10 移除：风格关键词库不再由 Agent 自动反查，仅通过前端用户显式选择的 `prompt_template` 注入；`STYLE_LIBRARY` 继续通过 `/api/styles/templates` 供前端模板选择使用。
 
 > `store_generated_image` 不在此列：由前端按钮触发 `POST /api/library/store`，不经过 Agent。
 
@@ -403,7 +404,7 @@ session_id 在整个对话窗口内不变；run_id 每轮 Agent 执行生成一�
 - `generate_image` 工具内部完成后额外推送 `generation_start` / `generation_done`
 - `enhance_prompt_node` / `refine_prompt_node` 得到结构化 prompt 后通过 `QueueEmitter` 推送 `prompt_update`
 
-当前实现注意：`analyze_reference_image`、`lookup_style_keywords`、`search_similar_cases` 是 LangChain `@tool`，可产生 `tool_start/end`；`enhance_prompt`、`generate_image`、`evaluate_generated_image`、`refine_prompt` 当前由 Graph 节点直接调用，不保证出现 LangGraph tool event。前端必须以 `generation_start/done` 和文本事件为主，不应把所有工具状态都当作必达事件。
+当前实现注意：`analyze_reference_image`、`search_similar_cases` 是 LangChain `@tool`，可产生 `tool_start/end`；`enhance_prompt`、`generate_image`、`evaluate_generated_image`、`refine_prompt` 当前由 Graph 节点直接调用，不保证出现 LangGraph tool event。前端必须以 `generation_start/done` 和文本事件为主，不应把所有工具状态都当作必达事件。
 
 ### 前端消费（`hooks/useSSE.ts`）
 
@@ -832,7 +833,6 @@ async def enhance_prompt(design_state: DesignState, ...) -> EnhancedPrompt:
 Trace: agent:turn  (session_id, user_id)
   ├── Span: node:agent
   ├── Span: tool:analyze_reference_image（按需）
-  ├── Span: tool:lookup_style_keywords（按需）
   ├── Span: tool:search_similar_cases（D-4 后按需）
   ├── Span: node:rag_gate
   ├── Span: node:enhance_prompt
@@ -847,8 +847,8 @@ Prompt 不存 Langfuse，统一放在 `agent/prompts.py`，用函数封装（方
 
 | 函数名 | 用途 | 变量参数 |
 |--------|------|----------|
-| `agent_system()` | agent 节点 System Prompt，覆盖信息收集、工具选择、生成决策与重试控制 | `design_state`, `style_keywords`, `reference_analysis`, `similar_cases` |
-| `enhance_prompt_system()` | enhance_prompt 节点/函数指令 | `design_state`, `reference_analysis`, `similar_cases`, `style_keywords` |
+| `agent_system()` | agent 节点 System Prompt，覆盖信息收集、工具选择、生成决策与重试控制；用户未选 `prompt_template` 时注入可用模板列表用于口头建议 | `design_state`, `reference_analysis`, `similar_cases`, `prompt_template` |
+| `enhance_prompt_system()` | enhance_prompt 节点/函数指令；风格关键词仅来自用户选择的 `prompt_template` | `design_state`, `reference_analysis`, `similar_cases`, `prompt_template` |
 | `evaluate_image_system()` | evaluate_generated_image 工具指令 | `design_state` |
 | `refine_prompt_system()` | refine_prompt 节点/函数指令 | `original_prompt`, `evaluation_result` |
 | `analyze_image_system()` | analyze_reference_image 工具指令 | 无（固定） |
@@ -936,12 +936,14 @@ raise TimeoutError("generation timeout")
 
 通过 `storage_service` 抽象屏蔽环境差异：
 
-| 环境 | 存储位置 | URL 格式 |
-|------|----------|----------|
-| 本地开发 | `backend/uploads/` 目录 | `http://localhost:8000/static/uploads/{uuid}.jpg` |
-| 生产目标 | MinIO | `http://minio:9000/bucket/{uuid}.jpg` |
+| 环境 | 用户上传 | 系统生成图（本地化） | URL 格式 |
+|------|----------|---------------------|----------|
+| 本地开发 | `backend/uploads/` | `backend/generated/` | `http://localhost:8000/static/uploads/{uuid}.ext` / `http://localhost:8000/static/generated/{uuid}.ext` |
+| 生产目标 | MinIO bucket（uploads） | MinIO bucket（generated） | `http://minio:9000/{bucket}/{uuid}.ext` |
 
 切换目标通过环境变量 `STORAGE=local|minio` 控制。当前已实现 `local` 分支，`minio` 分支暂抛 `NotImplementedError`，后续业务上传文件仍需补齐 MinIO 支持。
+
+系统生成图不再直接使用云端 provider 返回的临时 URL：Celery worker 在 `tasks/image_task.py` 里拿到结果后立即调用 `storage_service.download_and_save_generated_image()`，把图片下载并保存到 `backend/generated/`，写回 `/static/generated/{uuid}.ext`，避免云端 URL 过期导致历史会话图片失效。用户上传（参考图、批注图）和系统生成图的目录在本地开发按语义分开，不混用。
 
 ### 上传接口响应
 
@@ -1360,12 +1362,12 @@ backend/tests/
 
 **C-3 信息收集工具**
 
-- [x] 编写 `agent/prompts.py`（`agent_system` / `analyze_image_system` / `lookup_style_system` / `enhance_prompt_system` / `evaluate_image_system` / `refine_prompt_system` 全部 Prompt 函数，结构化指令风格）
+- [x] 编写 `agent/prompts.py`（`agent_system` / `analyze_image_system` / `enhance_prompt_system` / `evaluate_image_system` / `refine_prompt_system` 全部 Prompt 函数，结构化指令风格；`lookup_style_system` 已于 2026-05-10 随 `lookup_style_keywords` 一并移除）
 - [x] 编写 `agent/tools/prompt_templates.py`（9 种建筑风格关键词库，每种风格含 `positive` / `negative` / `mood` / `description` 四个字段；`description` 为 2-3 句风格说明，供 `enhance_prompt` LLM 参考；`positive`/`negative` 直接拼入图像生成 prompt）
 - [x] 编写 `agent/tools/image_analysis.py`（`analyze_reference_image`：调用 `LLMClient.ainvoke_with_vision`，返回 `ReferenceImageAnalysis` dict）
-- [x] 编写 `agent/tools/style_lookup.py`（`lookup_style_keywords`：从 `prompt_templates.py` 查询风格关键词，纯本地查询，无 LLM 调用）
+- [x] ~~编写 `agent/tools/style_lookup.py`~~（2026-05-10 移除：风格关键词不再由 Agent 自动注入，仅通过用户在前端选择的 `prompt_template` 注入）
 - [x] 编写 `agent/tools/search_library.py`（`search_similar_cases`：stub，D-4 接入 MCP）
-- [x] 工具按规则显式挂入 Graph：`agent_node` 内按规则调用（有图片 URL → 分析图片，有风格 → 查关键词）；`rag_gate_node` 按规则调用 `search_similar_cases`
+- [x] 工具按规则显式挂入 Graph：`agent_node` 内按规则调用（有图片 URL → 分析图片）；`rag_gate_node` 按规则调用 `search_similar_cases`
 
 **C-4 Prompt 构建与图像生成工具**
 
@@ -1540,7 +1542,7 @@ backend/tests/
 
 ## 当前状态
 
-**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 临时持久化；E-3 已完成 prompt 实时同步与风格模板独立注入，参数滑块因缺少跨平台通用 API 字段暂缓；E-3.5 已完成会话工作区服务端持久化并通过跨浏览器恢复验证；E-4 已完成生成图片工作区、下载、批注图上传与批注图生图链路；当前进入 E-5 全流程联调。
+**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 临时持久化；E-3 已完成 prompt 实时同步与风格模板独立注入，参数滑块因缺少跨平台通用 API 字段暂缓；E-3.5 已完成会话工作区服务端持久化并通过跨浏览器恢复验证；E-4 已完成生成图片工作区、下载、批注图上传与批注图生图链路；E-5 过程中补齐了中栏图片按比例显示 + 按对话位置锚定、系统生成图下载至 `backend/generated/` 的本地持久化、风格模板去自动注入、SSE 正常关闭时的假性断开提示修复；当前继续进行 E-5 全流程联调。
 
 **建议执行顺序（2026-05-08 调整）**：
 1. ~~C-6.1~~、~~C-8~~、~~E-1~~：已完成。
@@ -1553,6 +1555,11 @@ backend/tests/
 8. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-10：E-5 联调过程中修复四类问题并合并到一次 commit（`50cdb7e`）。
+  1. 中栏生成图展示：移除 `h-40 w-full object-cover` 固定尺寸，改为 `w-full h-auto` 按原始比例自适应；`GenerationPreview` 新增 `assistantMessageId`，实时生成时在 `chatStore.upsertGenerationPreview` 中绑定 `currentAssistantMessageId`，历史会话加载时按 `messages.created_at` 与 `generation_tasks.created_at` 做时间夹挤回填；`MessageList` 按关联 id 把图片渲染在对应 assistant 消息下，兜底保留末尾未关联渲染。后端 `message_id` 列暂不加，保持现状。
+  2. 系统生成图持久化：云端 provider 返回的临时 URL 过期会导致历史会话图片失效。新增 `backend/generated/` 目录与 `STATIC /static/generated` 挂载；`storage_service.download_and_save_generated_image()` 在 Celery worker 拿到 provider URL 后立即下载到本地，`image_task._async_generate` 将本地路径写回 `image_url`。目录按语义与用户上传 `uploads/` 拆开；`save_generated_image_base64` 顺手迁到 `generated/`，但它目前仍是死代码。
+  3. 风格关键词去自动注入：删除 `agent_node` 的 Rule 2 自动 `lookup_style_keywords`、`enhance_prompt` 内部 `get_style` 反查以及两段 `style_section` 注入；`_prompt_keywords` 不再产出 `style_positive/negative`；`STYLE_LIBRARY` 与 `list_styles()` 保留给 `/api/styles/templates` 和 `agent_system` 的"可用模板列表"使用；用户未选模板时 LLM 只能在 `reply` 中口头建议在右侧选择。`agent/tools/style_lookup.py`、`lookup_style_system` Prompt、`streaming.py` 中 `lookup_style_keywords` 的两条 summary 字符串全部删除。`design_state.style` 字段保留，仅作状态显示，不再触发自动注入。
+  4. SSE "流式连接已中断" 假报：`EventSource.onerror` 在服务器正常关闭连接时也会触发，与真正的网络错误无法区分。`useSSE` 新增 `doneReceived` 标志，收到 `done` 后 `onerror` 静默忽略。同时修复 `MessageList` 生成图 404：`<img src>` 直接用相对路径 `/static/generated/...` 会被 Next.js dev server 拦截，改为和 `GeneratedImagesTab` 一致走 `resolveImageUrl()` 拼前端 `NEXT_PUBLIC_API_BASE_URL`。
 - 2026-05-09：修复 E-4 联调时 Langfuse `Context error: No active span` 与 `tool:generate_image` 被标记 error 的问题。根因是 `agent:turn` observation 只包住了初始化元数据更新，进入异步 LangGraph / SSE 事件循环前已经退出，后续节点和工具没有 active span；同时 SSE consumer 关闭时 `stream_agent_events` 的 `finally` 会直接取消内部 graph task，可能打断正在轮询 Celery 的 `generate_image`，并引发 asyncpg 连接关闭时的 `CancelledError` 噪音。现调整为 `agent:turn` observation 覆盖整个 `stream_agent_events` 消费过程；普通 EventSource 断连不再直接取消 LangGraph 任务，真正用户中断仍通过 Redis cancel flag（新消息设置 `cancel:{session_id}:{run_id}`）生效。
 - 2026-05-09：E-4 完成生成图片工作区与批注图生图链路。批注导出复用 `/api/upload`，前端将结果保存为 session 级 `annotated_image`，手动清空或替换，不因新生成自动失效；提交消息时 `annotated_image` 与 `control_image` 并列写入 AgentState，不进入普通 `reference_images`，避免触发语义参考图 VLM 分析。图像生成请求新增 `input_image_urls`，顺序固定为 `control_image` 在前、`annotated_image` 在后；同时保留 `control_image_url` / `ref_image_url` 兼容字段。百炼按 content 数组先图后文发送，火山 `image` 字段在多图时传数组，GrsAI `urls` 字段传数组；同时存在两张输入图时 prompt 前置说明“图1/图2”含义并追加批注说明。
 - 2026-05-09：E-3.5 跨浏览器恢复已人工验证通过：换浏览器后可按 session 恢复历史消息和 prompt 草稿。E-4 先实现不依赖 D 阶段的生成图展示、下载、批注与批注图作为参考图回传；“存入图库”按钮在 E-4 仅做 UI 占位/禁用提示，待 D 阶段完成 `image-rag-mcp`、图库存储表和 `POST /api/library/store` 后再接入真实调用。接入时由后端路由直接调用 MCP `store_generated_image`，不经过 Agent。
