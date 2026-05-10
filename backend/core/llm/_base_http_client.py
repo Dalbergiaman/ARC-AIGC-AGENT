@@ -65,11 +65,17 @@ class _BaseHTTPLLMClient(LLMClientBase):
                     break
         raise RuntimeError(f"LLM request failed after {_MAX_RETRIES + 1} attempts") from last_exc
 
-    async def ainvoke(self, messages: list[BaseMessage]) -> str:
-        payload = {
+    def _thinking_off_params(self) -> dict:
+        """Return extra payload params to disable thinking mode. Subclasses override."""
+        return {}
+
+    async def ainvoke(self, messages: list[BaseMessage], enable_thinking: bool = True) -> str:
+        payload: dict = {
             "model": self._model,
             "messages": _build_messages(messages),
         }
+        if not enable_thinking:
+            payload.update(self._thinking_off_params())
         data = await self._post(payload)
         return data["choices"][0]["message"]["content"]
 

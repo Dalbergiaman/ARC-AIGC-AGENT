@@ -26,7 +26,7 @@ export function ChatPanel({
 }: Props) {
   return (
     <section className="grid h-full min-h-0 flex-1 grid-rows-[72px_minmax(0,1fr)_auto] overflow-hidden bg-white">
-      <header className="flex min-h-0 flex-col justify-center border-b border-black/6 bg-white px-6 py-4">
+      <header className="flex min-h-0 flex-col justify-center bg-white px-6 py-4">
         <div className="text-sm font-semibold">{sessionTitle}</div>
         <div className="text-xs text-muted-foreground">
           {streamState === "streaming" ? "模型正在回复" : "纯文字对话主链路"}

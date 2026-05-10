@@ -10,6 +10,7 @@ GET /api/chat/sessions/{session_id}/stream?stream_id=<uuid>
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from typing import AsyncIterator
@@ -30,7 +31,7 @@ from core.observability import (
     start_observation,
     update_current_span,
 )
-from models.database import get_session
+from models.database import get_session, async_session as _db_session_factory
 from models.schemas import GenerationTask
 from services.message_service import add_message, get_messages
 from services.session_service import get_session as get_db_session
@@ -469,10 +470,8 @@ async def _generate_sse(
                         task_row.raw_response = data.get("raw_response") if isinstance(data.get("raw_response"), dict) else task_row.raw_response
                         await db.commit()
 
-                # Buffer for reconnection
-                await _buffer_event(r, buffer_key, chunk)
-                yield chunk
-
+                # For the done event: persist assistant message, then yield done,
+                # then fire title generation in the background (non-blocking).
                 if should_persist_assistant and event_type == "done":
                     assistant_text = "".join(assistant_text_parts).strip()
                     if assistant_text:
@@ -483,12 +482,13 @@ async def _generate_sse(
                             metadata={"finish_reason": data.get("finish_reason", "stop")},
                         )
                         await add_message(db, session_id, "assistant", reply_text)
-                        try:
-                            await maybe_generate_session_title(db, session_id)
-                        except Exception:
-                            pass
+                        asyncio.create_task(_generate_title_bg(session_id))
                     await _clear_active_run(r, session_id, stream_id)
                     should_persist_assistant = False
+
+                # Buffer for reconnection
+                await _buffer_event(r, buffer_key, chunk)
+                yield chunk
 
                 # Do not stop the graph on transient EventSource disconnects. The
                 # stream buffer supports replay, and cancelling here can mark a
@@ -496,6 +496,15 @@ async def _generate_sse(
 
     finally:
         await r.aclose()
+
+
+async def _generate_title_bg(session_id: uuid.UUID) -> None:
+    """Generate session title in the background with its own DB session."""
+    try:
+        async with _db_session_factory() as db:
+            await maybe_generate_session_title(db, session_id)
+    except Exception:
+        pass
 
 
 def _ai_message(content: str):

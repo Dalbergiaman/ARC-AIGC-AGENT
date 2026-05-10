@@ -282,6 +282,10 @@ export function ChatWorkspace({ sessionId }: Props) {
       setStreamState("idle");
       finalizeAssistantMessage();
       setStreamId(null);
+      // Title generation runs in the background on the server; refresh after a delay.
+      setTimeout(() => {
+        refreshSessions().then(setSessions).catch(() => undefined);
+      }, 3000);
     },
   });
 

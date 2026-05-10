@@ -21,11 +21,12 @@ class LLMClient:
         self,
         messages: list[BaseMessage],
         images: list[str] | None = None,
+        enable_thinking: bool = True,
     ) -> str:
         client = self._make_client()
         if images:
             return await client.ainvoke_with_vision(messages, images)
-        return await client.ainvoke(messages)
+        return await client.ainvoke(messages, enable_thinking=enable_thinking)
 
     async def astream(
         self,

@@ -31,8 +31,10 @@ async def maybe_generate_session_title(db: AsyncSession, session_id: uuid.UUID) 
         return current_title or DEFAULT_SESSION_TITLE
 
     prompt = (
-        "请基于这轮建筑效果图对话，为会话生成一个简短标题。"
-        "要求：1) 4到8个英文单词或4到12个中文字符；2) 不要加引号；3) 不要使用标点结尾；4) 只返回标题本身。"
+        "请基于这轮对话内容，为会话生成一个简短但具体的标题。"
+        "要求：1) 4到10个中文字符或4到8个英文单词；2) 不要加引号；3) 不要使用标点结尾；4) 只返回标题本身；"
+        "5) 标题必须体现具体的建筑类型、风格、场景或设计意图，禁止使用【建筑效果图生成】【效果图设计】等笼统表述；"
+        "6) 好的示例：滨海现代住宅夜景、中式庭院别墅鸟瞰、玻璃幕墙办公楼日景。"
     )
 
     raw_title = await _llm.ainvoke(
@@ -40,11 +42,12 @@ async def maybe_generate_session_title(db: AsyncSession, session_id: uuid.UUID) 
             SystemMessage(content=prompt),
             HumanMessage(
                 content=(
-                    f"用户首条消息：{first_user}\n"
-                    f"助手首条回复：{first_assistant}"
+                    f"用户描述：{first_user}\n"
+                    f"助手回复摘要：{first_assistant[:300]}"
                 )
             ),
-        ]
+        ],
+        enable_thinking=False,
     )
     title = _normalize_title(raw_title)
     if not title:

@@ -71,7 +71,7 @@ export function WorkspacePanel({
               type="button"
               onClick={() => onTabChange("prompt")}
               className={`rounded-md px-3 py-1.5 text-sm ${
-                activeTab === "prompt" ? "bg-black text-white" : "border border-black/8 bg-white"
+                activeTab === "prompt" ? "bg-black/8 text-foreground" : "border border-black/8 bg-white"
               }`}
             >
               提示词
@@ -80,7 +80,7 @@ export function WorkspacePanel({
               type="button"
               onClick={() => onTabChange("images")}
               className={`rounded-md px-3 py-1.5 text-sm ${
-                activeTab === "images" ? "bg-black text-white" : "border border-black/8 bg-white"
+                activeTab === "images" ? "bg-black/8 text-foreground" : "border border-black/8 bg-white"
               }`}
             >
               生成图片
