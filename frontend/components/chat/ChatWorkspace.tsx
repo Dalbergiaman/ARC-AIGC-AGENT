@@ -72,6 +72,7 @@ export function ChatWorkspace({ sessionId }: Props) {
     workspaceCollapsed,
     workspaceWidthRatio,
     toggleWorkspace,
+    setWorkspaceCollapsed,
     setWorkspaceWidthRatio,
     getControlImage,
     getAnnotatedImage,
@@ -293,6 +294,9 @@ export function ChatWorkspace({ sessionId }: Props) {
     setErrorMessage(null);
     setToolStatus(null);
     setStreamState("submitting");
+    if (messages.length === 0 && workspaceCollapsed) {
+      setWorkspaceCollapsed(false);
+    }
     addUserMessage(content);
     beginAssistantMessage();
 
@@ -396,6 +400,13 @@ export function ChatWorkspace({ sessionId }: Props) {
     />
   );
 
+  const visibleMessages = loadingSession && currentSessionId !== sessionId ? [] : messages;
+  const isWelcome =
+    !loadingSession &&
+    visibleMessages.length === 0 &&
+    streamState === "idle" &&
+    !errorMessage;
+
   return (
     <div
       ref={containerRef}
@@ -410,14 +421,15 @@ export function ChatWorkspace({ sessionId }: Props) {
       />
       <ChatPanel
         sessionTitle={sessionTitle}
-        messages={loadingSession && currentSessionId !== sessionId ? [] : messages}
+        messages={visibleMessages}
         activeToolStatus={activeToolStatus}
         generationPreviews={generationPreviews.filter((item) => item.imageUrl)}
         streamState={streamState}
         errorMessage={errorMessage}
+        isWelcome={isWelcome}
         onSubmit={handleSubmit}
       />
-      {workspacePanel}
+      {isWelcome ? null : workspacePanel}
     </div>
   );
 }
