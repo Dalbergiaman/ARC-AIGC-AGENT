@@ -1,9 +1,9 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { updateDashboardConfig, getDashboardConfig, getDashboardProviders } from "@/lib/api";
+import { listSessions, updateDashboardConfig, getDashboardConfig, getDashboardProviders } from "@/lib/api";
 import type { DashboardConfig, DashboardConfigPatch, DashboardProviders } from "@/lib/types";
 import { EmbeddingConfig } from "@/components/dashboard/EmbeddingConfig";
 import { ImageProviderConfig } from "@/components/dashboard/ImageProviderConfig";
@@ -24,12 +24,26 @@ function mergePatch(config: DashboardConfig, patch: DashboardConfigPatch): Dashb
 type SettingsTab = "model" | "embedding" | "langfuse";
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [config, setConfig] = useState<DashboardConfig | null>(null);
   const [providers, setProviders] = useState<DashboardProviders | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("model");
+  const [navigatingBack, setNavigatingBack] = useState(false);
+
+  async function handleBack() {
+    if (navigatingBack) return;
+    setNavigatingBack(true);
+    try {
+      const sessions = await listSessions();
+      const latestId = sessions[0]?.id;
+      router.push(latestId ? `/chat/${latestId}` : "/chat/new");
+    } catch {
+      router.push("/chat/new");
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -91,12 +105,14 @@ export default function DashboardPage() {
     <div className="flex flex-1 flex-col">
       <header className="flex items-center justify-between border-b px-4 py-3">
         <div className="flex items-center gap-2">
-          <Link
-            href="/chat/new"
-            className="rounded-md border px-2 py-1 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+          <button
+            type="button"
+            onClick={handleBack}
+            disabled={navigatingBack}
+            className="rounded-md border px-2 py-1 text-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-60"
           >
             &lt;
-          </Link>
+          </button>
           <h1 className="text-base font-semibold">Dashboard</h1>
         </div>
         <Button onClick={handleSave} disabled={loading || saving || !canRenderForm}>
