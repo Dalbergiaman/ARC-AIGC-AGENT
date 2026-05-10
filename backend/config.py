@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     STORAGE: str = "local"
     UPLOAD_DIR: str = "uploads"
+    GENERATED_DIR: str = "generated"
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

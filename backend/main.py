@@ -65,4 +65,6 @@ if settings.STORAGE == "local":
     import os
 
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    os.makedirs(settings.GENERATED_DIR, exist_ok=True)
     app.mount("/static/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
+    app.mount("/static/generated", StaticFiles(directory=settings.GENERATED_DIR), name="generated")

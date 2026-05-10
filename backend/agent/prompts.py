@@ -1,11 +1,10 @@
 """All agent/tool prompt functions. Version-controlled via git, no external dependency."""
 from agent.state import DesignState, EvaluationResult, ReferenceImageAnalysis
-from agent.tools.prompt_templates import StyleKeywords
+from agent.tools.prompt_templates import list_styles
 
 
 def agent_system(
     design_state: DesignState,
-    style_keywords: StyleKeywords | None = None,
     reference_analysis: list[ReferenceImageAnalysis] | None = None,
     similar_cases: list[dict] | None = None,
     prompt_template: dict | None = None,
@@ -32,25 +31,22 @@ def agent_system(
             lines.append(f"  - {c.get('caption', '')} (prompt: {c.get('prompt', '')[:80]}...)")
         cases_section = "【相似案例（RAG）】\n" + "\n".join(lines)
 
-    style_section = ""
-    if style_keywords and style_keywords.get("found"):
-        kw = ", ".join(style_keywords.get("positive", [])[:5])
-        desc = style_keywords.get("description", "")
-        style_section = (
-            f"【用户指定的风格参考：{style_keywords.get('style')}】\n"
-            f"  氛围：{style_keywords.get('mood', '')}\n"
-            f"  说明：{desc}\n"
-            f"  关键词：{kw}"
-        )
-
     template_section = ""
     if prompt_template:
         template_section = (
-            f"【用户选择的风格模板：{prompt_template.get('style', '')}】\n"
+            f"【用户已选择的风格模板：{prompt_template.get('style', '')}】\n"
             f"  氛围：{prompt_template.get('mood', '')}\n"
             f"  说明：{prompt_template.get('description', '')}\n"
             f"  正向关键词：{', '.join(prompt_template.get('positive', [])[:8])}\n"
             f"  负向关键词：{', '.join(prompt_template.get('negative', [])[:8])}"
+        )
+    else:
+        available = "、".join(list_styles())
+        template_section = (
+            "【风格模板：用户尚未选择】\n"
+            f"  右侧面板可选模板：{available}\n"
+            "  你不能擅自套用任何模板。如果用户描述明显贴近某个模板，"
+            "  可以在 reply 里以一句口头建议的形式邀请用户在右侧选择，但不要直接代选或假设已选。"
         )
 
     return f"""你是一位专业建筑效果图生成助手，负责通过多轮对话收集设计参数，并在信息充分时触发图像生成。
@@ -70,7 +66,6 @@ def agent_system(
 
 {ref_section}
 {cases_section}
-{style_section}
 {template_section}
 
 ## 你的职责
@@ -93,7 +88,8 @@ def agent_system(
 - 若 `missing_fields` 非空且用户未明确要求生成 → 追问缺失字段（每次只问最重要的 1～2 个）
 - 只有用户本轮明确要求生成 / 出图 / 渲染 / 重新生成时，才可以输出 `ready_to_generate: true`
 - 若用户要求中断或取消 → 输出 `phase: interrupted`
-- 若用户选择了风格模板，它只是额外上下文；不要用模板覆盖用户已明确提供的字段。若模板与已有草稿重复，保留已有内容，并优先追问最影响生成质量的缺失字段。
+- 若用户已选择风格模板，它只是额外上下文；不要用模板覆盖用户已明确提供的字段。若模板与已有草稿重复，保留已有内容，并优先追问最影响生成质量的缺失字段。
+- 若用户尚未选择模板，且其描述明显贴近某个可用模板，可在 reply 中以一句温和建议的形式提示"右侧可选 XX 模板"；切勿假设用户已选或将模板内容当作已生效的状态。
 
 ## 输出格式（JSON）
 
@@ -123,7 +119,7 @@ def agent_system(
 规则：
 - `design_state_updates` 只填本轮有变化的字段，未变化的字段留空字符串
 - `llm_description` 不是关键词列表，而是一段自然语言画面描述；优先吸收用户关于氛围、构图、空间感、细节感的表达
-- `reply` 是展示给用户的回复，不要暴露 JSON 结构或技术细节, 不管用户提出什么问题，你都必须为reply提供一个有用的回答，不能直接说“请提供更多信息”或者“我不清楚”甚至直接是空字段，而是要引导用户提供缺失的信息，例如“这个设计是面向住宅还是商业用途呢？”或者“您更倾向于现代风格还是传统风格呢？”等引导性问题。
+- `reply` 是展示给用户的回复，不要暴露 JSON 结构或技术细节, 不管用户提出什么问题，你都必须为reply提供一个有用的回答，不能直接说"请提供更多信息"或者"我不清楚"甚至直接是空字段，而是要引导用户提供缺失的信息，例如"这个设计是面向住宅还是商业用途呢？"或者"您更倾向于现代风格还是传统风格呢？"等引导性问题。
 - 若 `ready_to_generate` 为 true，`phase` 改为 `generating`；不要因为信息完整度高而自行改为生成
 - 若用户中断，`phase` 改为 `interrupted`，`ready_to_generate` 为 false"""
 
@@ -150,16 +146,10 @@ def analyze_image_system() -> str:
 - 风格描述尽量与以下词汇对齐：极简主义、新中式、工业风、现代主义、北欧风、地中海风、日式禅意、未来主义、建筑竞赛风"""
 
 
-def lookup_style_system() -> str:
-    return """根据用户提供的建筑风格名称，从本地关键词库中查询对应的正向关键词、负向关键词和氛围描述。
-这是纯本地查询，无需调用外部 API。"""
-
-
 def enhance_prompt_system(
     design_state: DesignState,
     reference_analysis: list[ReferenceImageAnalysis] | None = None,
     similar_cases: list[dict] | None = None,
-    style_keywords: StyleKeywords | None = None,
     llm_description: str = "",
     custom_description: str = "",
     prompt_template: dict | None = None,
@@ -179,18 +169,6 @@ def enhance_prompt_system(
             cases_section = "【历史优质提示词参考】\n" + "\n".join(
                 f"  - {p[:120]}" for p in prompts
             )
-
-    style_section = ""
-    if style_keywords and style_keywords.get("found"):
-        desc = style_keywords.get("description", "")
-        kw = ", ".join(style_keywords.get("positive", []))
-        neg_kw = ", ".join(style_keywords.get("negative", []))
-        style_section = (
-            f"【风格说明：{style_keywords.get('style')}】\n"
-            f"{desc}\n"
-            f"正向关键词：{kw}\n"
-            f"负向关键词：{neg_kw}"
-        )
 
     description_section = ""
     if llm_description or custom_description:
@@ -225,7 +203,6 @@ def enhance_prompt_system(
 
 {ref_section}
 {cases_section}
-{style_section}
 {description_section}
 {template_section}
 
@@ -241,8 +218,8 @@ def enhance_prompt_system(
 要求：
 - prompt 必须是英文，从建筑类型和风格开始，依次加入材质、光线、视角、环境
 - 如果用户提供了图生图底图，请明确要求保留底图的建筑体量、透视关系、空间尺度和主要构图，只改变用户要求调整的风格、材质、光线或氛围
-- 将“模型整理描述”和“用户自定义描述”融合进 prompt，不要只输出关键词
-- 若存在“用户选择的风格模板”，将其作为额外风格上下文融入 prompt，但不要覆盖用户已明确提供的设计参数
+- 将"模型整理描述"和"用户自定义描述"融合进 prompt，不要只输出关键词
+- 仅当存在"用户选择的风格模板"时，才将其作为风格上下文融入 prompt；用户未选模板时，按设计参数中的风格字段自然描述即可，不要套用任何模板关键词库
 - 融入参考图特征和历史案例的有效表达方式
 - negative_prompt 包含通用质量负向词（blurry, distorted, watermark）和风格冲突词
 - 不要在 prompt 中重复相同概念"""

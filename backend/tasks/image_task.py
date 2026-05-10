@@ -5,6 +5,7 @@ from celery_app import celery_app
 from core.image.base import GenerationRequest
 from core.image.generator import ImageGenerator
 from agent.tools.image_analysis import _to_data_url
+from services.storage_service import download_and_save_generated_image
 
 
 async def _async_generate(request_dict: dict) -> dict:
@@ -26,8 +27,11 @@ async def _async_generate(request_dict: dict) -> dict:
     request = GenerationRequest(**request_dict)
     generator = ImageGenerator()
     result = await generator.generate(request)
+
+    local_url = await download_and_save_generated_image(result.image_url)
+
     return {
-        "image_url": result.image_url,
+        "image_url": local_url,
         "provider": result.provider,
         "generation_time": result.generation_time,
         "raw_response": result.raw_response,

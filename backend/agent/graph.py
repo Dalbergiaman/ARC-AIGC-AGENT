@@ -24,7 +24,6 @@ from agent.tools.image_evaluator import evaluate_generated_image
 from agent.tools.image_generator import NullEmitter, generate_image
 from core.llm.streaming import get_current_emitter
 from agent.tools.prompt_builder import EnhancedPrompt, enhance_prompt, refine_prompt
-from agent.tools.style_lookup import lookup_style_keywords
 from agent.tools.search_library import search_similar_cases
 from core.llm.client import LLMClient
 from core.observability import message_preview, observe, update_current_span
@@ -48,7 +47,7 @@ _GENERATION_INTENT_RE = re.compile(
 )
 
 
-def _prompt_keywords(design_state: dict, style_keywords: dict | None = None) -> dict[str, str]:
+def _prompt_keywords(design_state: dict) -> dict[str, str]:
     keywords: dict[str, str] = {}
     mapping = {
         "building_type": "building_type",
@@ -65,13 +64,6 @@ def _prompt_keywords(design_state: dict, style_keywords: dict | None = None) -> 
         value = design_state.get(key)
         if value:
             keywords[target] = str(value)
-    if style_keywords and style_keywords.get("found"):
-        pos = style_keywords.get("positive", [])
-        neg = style_keywords.get("negative", [])
-        if pos:
-            keywords["style_positive"] = ", ".join(pos)
-        if neg:
-            keywords["style_negative"] = ", ".join(neg)
     return keywords
 
 
@@ -123,12 +115,11 @@ def _build_prompt_draft(
     custom_description: str = "",
     user_prompt_hint: str = "",
     llm_reply_hint: str = "",
-    style_keywords: dict | None = None,
     negative_prompt: str = "",
     prompt_template: dict | None = None,
 ) -> PromptDraft:
     return {
-        "keywords": _prompt_keywords(design_state, style_keywords),
+        "keywords": _prompt_keywords(design_state),
         "llm_description": _compose_llm_description(
             design_state=design_state,
             reference_images=reference_images,
@@ -196,7 +187,6 @@ async def agent_node(state: AgentState) -> dict:
 
     Tool calls are rule-based (deterministic), not LLM-driven:
     - Image URL in latest message → analyze_reference_image
-    - Style field just set → lookup_style_keywords
     - RAG gate is handled by rag_gate_node, not here
     """
     design_state = dict(state.get("design_state") or {})
@@ -205,7 +195,6 @@ async def agent_node(state: AgentState) -> dict:
     similar_cases = list(state.get("similar_cases") or [])
     messages = list(state.get("messages") or [])
     explicit_generation_intent = has_explicit_generation_intent(messages)
-    style_keywords = None
     workspace = dict(state.get("workspace") or {})
     custom_description = str(workspace.get("custom_description", "") or "")
     prompt_hint = str(workspace.get("llm_description", "") or "")
@@ -267,18 +256,10 @@ async def agent_node(state: AgentState) -> dict:
     if new_urls:
         updates["reference_images"] = reference_images
 
-    # --- Rule 2: look up style keywords when style is set ---
-    current_style = design_state.get("style", "")
-    if current_style:
-        kw_result = await lookup_style_keywords.ainvoke({"style": current_style})
-        if kw_result.get("found"):
-            style_keywords = kw_result
-
     # --- Call LLM for intent understanding and DesignState update ---
     llm_messages = [
         SystemMessage(content=agent_system(
             design_state=design_state,
-            style_keywords=style_keywords,
             reference_analysis=reference_images,
             similar_cases=similar_cases,
             prompt_template=prompt_template,
@@ -350,7 +331,6 @@ async def agent_node(state: AgentState) -> dict:
         custom_description=custom_description,
         user_prompt_hint=prompt_hint,
         llm_reply_hint=llm_description,
-        style_keywords=style_keywords,
         negative_prompt=str(workspace.get("negative_prompt", "") or ""),
         prompt_template=prompt_template,
     )

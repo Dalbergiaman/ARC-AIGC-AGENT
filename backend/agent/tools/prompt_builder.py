@@ -12,7 +12,6 @@ from pydantic import BaseModel, ValidationError
 
 from agent.prompts import enhance_prompt_system, refine_prompt_system
 from agent.state import DesignState, EvaluationResult, ReferenceImageAnalysis
-from agent.tools.prompt_templates import StyleKeywords, get_style
 from core.llm.client import LLMClient
 from core.observability import message_preview, observe, update_current_generation
 
@@ -49,19 +48,11 @@ async def enhance_prompt(
 
     Called by enhance_prompt_node in the deterministic generation sub-flow.
     """
-    style_keywords: StyleKeywords | None = None
-    style = design_state.get("style", "")
-    if style:
-        kw = get_style(style)
-        if kw:
-            style_keywords = {**kw, "found": True}
-
     messages = [
         SystemMessage(content=enhance_prompt_system(
             design_state=design_state,
             reference_analysis=reference_analysis,
             similar_cases=similar_cases,
-            style_keywords=style_keywords,
             llm_description=llm_description,
             custom_description=custom_description,
             prompt_template=prompt_template,
@@ -75,7 +66,6 @@ async def enhance_prompt(
             "design_state": design_state,
             "reference_image_count": len(reference_analysis or []),
             "similar_case_count": len(similar_cases or []),
-            "style_keywords_found": style_keywords is not None,
             "has_prompt_template": bool(prompt_template),
         },
         output=message_preview(raw),

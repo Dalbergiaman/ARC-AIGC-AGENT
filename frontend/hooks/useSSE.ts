@@ -94,6 +94,8 @@ export function useSSE({
       `${getApiBaseUrl()}/api/chat/sessions/${sessionId}/stream?stream_id=${streamId}`,
     );
 
+    let doneReceived = false;
+
     const handleEvent = (eventType: SSEEventType, event: MessageEvent<string>) => {
       let data: Record<string, unknown> = {};
       try {
@@ -160,6 +162,7 @@ export function useSSE({
         handlers.onError?.(data.code, data.message);
       }
       if (eventType === "done" && typeof data.finish_reason === "string") {
+        doneReceived = true;
         handlers.onDone?.(data.finish_reason as "stop" | "max_retries" | "interrupted");
         eventSource.close();
       }
@@ -186,6 +189,7 @@ export function useSSE({
     eventSource.addEventListener("error", errorListener);
     eventSource.addEventListener("done", doneListener);
     eventSource.onerror = () => {
+      if (doneReceived) return;
       handlersRef.current.onError?.("SSE_CONNECTION_ERROR", "流式连接已中断");
       eventSource.close();
     };

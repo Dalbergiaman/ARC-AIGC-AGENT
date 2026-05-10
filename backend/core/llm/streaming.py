@@ -70,7 +70,6 @@ class QueueEmitter:
 
 _TOOL_SUMMARIES: dict[str, str] = {
     "analyze_reference_image": "正在分析参考图...",
-    "lookup_style_keywords": "正在查询风格关键词...",
     "search_similar_cases": "正在检索相似案例...",
     "enhance_prompt": "正在构建生成提示词...",
     "refine_prompt": "正在优化提示词...",
@@ -80,7 +79,6 @@ _TOOL_SUMMARIES: dict[str, str] = {
 
 _TOOL_DONE_SUMMARIES: dict[str, str] = {
     "analyze_reference_image": "参考图分析完成",
-    "lookup_style_keywords": "风格关键词已加载",
     "search_similar_cases": "相似案例检索完成",
     "enhance_prompt": "提示词构建完成",
     "refine_prompt": "提示词优化完成",

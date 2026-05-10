@@ -72,6 +72,7 @@ export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt?: string;
+  created_at?: string;
 };
 
 export type SubmitMessageResponse = {
@@ -88,6 +89,8 @@ export type GenerationPreview = {
   prompt?: string;
   negativePrompt?: string | null;
   rawResponse?: Record<string, unknown> | null;
+  assistantMessageId?: string;
+  created_at?: string;
 };
 
 export type StyleTemplate = {

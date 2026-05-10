@@ -155,8 +155,9 @@ export function ChatWorkspace({ sessionId }: Props) {
           })),
         );
         setGenerationPreviews(
-          (sessionDetail.generation_tasks ?? [])
-            .map((item) => ({
+          (() => {
+            const msgs = sessionDetail.messages ?? [];
+            const previews = (sessionDetail.generation_tasks ?? []).map((item) => ({
               taskId: item.task_id ?? item.id,
               imageUrl: item.image_url ?? "",
               runId: undefined,
@@ -166,7 +167,26 @@ export function ChatWorkspace({ sessionId }: Props) {
               prompt: item.prompt,
               negativePrompt: item.negative_prompt ?? null,
               rawResponse: item.raw_response ?? null,
-            })),
+              created_at: item.created_at,
+            }));
+
+            const assistantMsgs = msgs.filter((m) => m.role === "assistant" && m.created_at);
+            return previews.map((preview) => {
+              if (!preview.created_at || assistantMsgs.length === 0) return preview;
+              const previewTime = new Date(preview.created_at).getTime();
+              let bestMatch: (typeof assistantMsgs)[0] | null = null;
+              let bestDiff = Infinity;
+              for (const msg of assistantMsgs) {
+                const diff = previewTime - new Date(msg.created_at!).getTime();
+                if (diff >= 0 && diff < bestDiff) {
+                  bestDiff = diff;
+                  bestMatch = msg;
+                }
+              }
+              if (!bestMatch) bestMatch = assistantMsgs[assistantMsgs.length - 1];
+              return { ...preview, assistantMessageId: bestMatch.id };
+            });
+          })(),
         );
       } catch (error) {
         if (!active) {

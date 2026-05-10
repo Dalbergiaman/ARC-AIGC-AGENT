@@ -130,7 +130,10 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) => {
       const existing = state.generationPreviews.findIndex((item) => item.taskId === preview.taskId);
       if (existing === -1) {
-        return { generationPreviews: [...state.generationPreviews, preview] };
+        const entry = preview.assistantMessageId
+          ? preview
+          : { ...preview, assistantMessageId: state.currentAssistantMessageId ?? undefined };
+        return { generationPreviews: [...state.generationPreviews, entry] };
       }
 
       const next = [...state.generationPreviews];
