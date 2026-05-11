@@ -86,3 +86,12 @@ export function submitChatMessage(
     body: JSON.stringify(payload),
   });
 }
+
+export type GalleryImage = {
+  url: string;
+  mtime: number;
+};
+
+export function listGalleryImages(): Promise<GalleryImage[]> {
+  return requestJson<GalleryImage[]>("/api/gallery/images");
+}
