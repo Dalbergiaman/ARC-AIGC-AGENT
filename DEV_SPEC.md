@@ -58,22 +58,28 @@ FastAPI 后端 (Python)
 aigc_agent/
 ├── DEV_SPEC.md                         # 本文件
 ├── docker-compose.yml
-├── image-rag-mcp/                      # 独立 MCP 服务（stdio 通信；D 阶段补齐）
-│   ├── main.py                         # 当前 uv 初始化入口，占位
-│   ├── server.py                       # 规划：FastMCP stdio 入口（D-1 新增）
-│   ├── tools/                          # 规划：D-3 新增
-│   │   ├── store.py                    # 规划：store_generated_image 工具
-│   │   ├── search.py                   # 规划：search_by_text / search_by_image 工具
-│   │   └── retrieve.py                 # 规划：get_image_by_id 工具
+├── image-rag-mcp/                      # 独立 MCP 服务（stdio 通信）
+│   ├── main.py                         # uv 初始化入口（占位，未使用；实际入口 server.py）
+│   ├── server.py                       # FastMCP stdio 入口，lifespan 串 PG + Milvus，注册 5 个工具
+│   ├── config.py                       # 环境变量 / dashboard.yaml / 维度常量
+│   ├── tools/
+│   │   ├── __init__.py
+│   │   ├── store.py                    # store_generated_image：下载副本 → caption → 双 embedding → PG + Milvus
+│   │   ├── search.py                   # search_by_text / search_by_image（短 URL 自动反解为本地文件）
+│   │   └── retrieve.py                 # get_image_by_id（PG 全字段）
 │   ├── core/
+│   │   ├── __init__.py
 │   │   ├── embedding/                  # Embedding 模块（独立文件夹）
 │   │   │   ├── base.py                 # 抽象基类 TextEmbeddingClientBase / ImageEmbeddingClientBase
-│   │   │   ├── volcengine_text.py      # 火山引擎 doubao-embedding 文本客户端（云端调用）
-│   │   │   ├── volcengine_image.py     # 火山引擎 doubao-embedding-vision 图像客户端（云端调用）
-│   │   │   └── factory.py             # TextEmbeddingFactory / ImageEmbeddingFactory
-│   │   ├── vlm_caption.py              # 规划：调用对话 LLM API 生成图片 Caption
-│   │   ├── milvus_client.py            # 规划：Milvus 操作封装
-│   │   └── pg_client.py               # 规划：PostgreSQL 操作封装（image_library 表 CRUD，image_id 关联 Milvus）
+│   │   │   ├── volcengine_text.py      # 火山引擎 doubao-embedding-vision 文本输入客户端
+│   │   │   ├── volcengine_image.py     # 火山引擎 doubao-embedding-vision 图像输入客户端
+│   │   │   └── factory.py              # TextEmbeddingFactory / ImageEmbeddingFactory
+│   │   ├── vlm_caption.py              # 复用 dashboard.yaml LLM 调 VLM 生成检索用中文 caption
+│   │   ├── milvus_client.py            # Milvus 操作封装（HNSW/COSINE + INVERTED 索引、insert / search）
+│   │   ├── pg_client.py                # PostgreSQL 操作封装（image_library 表 CRUD）
+│   │   └── storage.py                  # library_images/ 副本管理：save_source_url / library_url_for / resolve_library_url
+│   ├── library_images/                 # 图库本地副本（gitignored），按 {image_id}.{ext} 存储
+│   ├── scripts/                        # 各阶段 stdio E2E smoke（test_d1_smoke / test_d1_stdio / test_d2_smoke / test_d3_stdio）
 │   └── pyproject.toml                  # uv 项目配置
 ├── frontend/                           # Next.js 前端
 │   ├── app/
@@ -1033,7 +1039,7 @@ generation_tasks  (id, session_id, task_id, prompt, negative_prompt, provider, i
 image_library (
     id              UUID PRIMARY KEY,   -- 与 Milvus 向量的关联键
     session_id      UUID,
-    image_url       TEXT,
+    image_url       TEXT,               -- 短 URL `/static/library/{id}.{ext}`，指向 image-rag-mcp/library_images 本地副本
     caption         TEXT,               -- VLM 生成的图片描述
     prompt          TEXT,               -- 正向提示词
     negative_prompt TEXT,
@@ -1043,16 +1049,18 @@ image_library (
 )
 ```
 
+> ⚠️ `image_url` 不是任意外部 URL：D-3 副本管理改造后，store 工具一定会先把源图下载到 `image-rag-mcp/library_images/{id}.{ext}`，PG 与 Milvus 都存指向该副本的短 URL。这样图库与上游 `backend/generated/` 或 MinIO 生命周期完全解耦；前端需要 backend FastAPI 把 `image-rag-mcp/library_images/` 挂为 `/static/library` 静态目录才能直接展示。
+
 当前实现状态：四张主业务表已由 SQLAlchemy 定义并在 FastAPI lifespan 中自动创建；`messages` 已用于 Chat/SSE 主链路；`sessions.workspace_state` 已作为 prompt 草稿主存储；`reference_images.analysis` 已保存参考图分析、用户意图/说明和 `sent` 状态；`generation_tasks` 已保存生成任务 `task_id`、prompt、negative prompt、provider、status、score、raw_response 等，用于历史会话恢复生成结果。旧开发库的 `sessions.title` / `sessions.workspace_state` 和 `generation_tasks` 扩展列由 `models/schema_guard.py` 在启动期补齐。
 
 **Milvus Collection（向量库）**
 ```
 image_id        # 主键，对应 image_library.id
 caption_vector  # doubao-embedding-vision 生成（caption 文本输入，文字检索用），2048 维
-image_vector    # doubao-embedding-vision 生成（图片输入，以图搜图用），2048 维
+image_vector   # doubao-embedding-vision 生成（图片输入，以图搜图用），2048 维
 style           # 标量过滤字段
 building_type   # 标量过滤字段
-image_url       # 标量字段，直接返回预览
+image_url       # 短 URL `/static/library/{id}.{ext}`，与 image_library.image_url 同源；标量字段，直接返回预览
 ```
 
 ---
@@ -1166,6 +1174,10 @@ docker exec -it aigc_agent-postgres-1 psql -U postgres -c "CREATE DATABASE aigc_
 ---
 
 ## search_similar_cases 触发与使用
+
+> ⚠️ **本章节为旧设计（C-3 ~ D-3 阶段的"自动注入 prompt"方案），D-4 起将整章重写。**
+>
+> 新设计要点（D-4 commit 1~6 落地）：RAG 召回结果不再自动注入 `enhance_prompt`，改为 `rag_gate_node` 在中栏对话弹候选浮窗，用户 120s 内选中 / 跳过 / 超时不选；选中后图作为 `AgentState.rag_image` 第三槽位参考图，跟 `control_image` / `annotated_image` 并列写入 `GenerationRequest.input_image_urls`，prompt 头部按"图N 为氛围参考：{ambience_note}"追加；`AgentState.similar_cases` 字段将废弃，下方所有"写入 similar_cases / 作为 enhance_prompt 参数"的描述都会移除。当前实现仍是旧链路（`agent/tools/search_library.py` 是 stub 返回空数组），DEV_SPEC 决策记录里有完整新设计描述。
 
 **触发时机**：使用规则门控（`rag_gate`）优先判断，Agent 只在规则允许的范围内补充决策。满足以下任一条件时调用 `search_similar_cases`，将结果存入 `AgentState.similar_cases`：
 
@@ -1494,9 +1506,11 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
 
 **D-3 MCP 工具实现**
 
-- [x] 编写 `image-rag-mcp/tools/store.py`（`store_generated_image`：VLM caption → embedding → 存 Milvus + PostgreSQL；`style` / `building_type` 从 `design_state` 自动提取）
-- [x] 编写 `image-rag-mcp/tools/search.py`（`search_by_text`：文字 → caption_vector 检索，支持可选 `filters: dict[str, str]` 标量过滤（只对非空字段构造 `expr`）；`search_by_image`：图片 → image_vector 检索，同样支持可选 filters；返回 Milvus 字段 image_id/caption/image_url/style/building_type/score）
+- [x] 编写 `image-rag-mcp/tools/store.py`（`store_generated_image`：先把源图下载到 `library_images/{image_id}.{ext}` 副本，再用本地 data URL 跑 VLM caption + 双 embedding，最后插入 PG 和 Milvus；PG/Milvus 都存短 URL `/static/library/{id}.{ext}`，插入失败回滚副本；`style` / `building_type` 从 `design_state` 自动提取）
+- [x] 编写 `image-rag-mcp/tools/search.py`（`search_by_text`：文字 → caption_vector 检索，支持可选 `filters: dict[str, str]` 标量过滤（只对非空字段构造 `expr`）；`search_by_image`：图片 → image_vector 检索，同样支持可选 filters；输入若是短库 URL 自动反解为本地文件 data URL；返回 Milvus 字段 image_id/caption/image_url/style/building_type/score）
 - [x] 编写 `image-rag-mcp/tools/retrieve.py`（`get_image_by_id`：按 image_id 查 PostgreSQL）
+- [x] 编写 `image-rag-mcp/core/storage.py`（图库副本管理：`save_source_url` 下载源 URL（http 或 data URL）到 `library_images/{image_id}.{ext}`，`library_url_for` 生成短 URL，`resolve_library_url` 反解短 URL 为本地 `Path`，`to_data_url` 把本地副本转 base64）
+- [ ] backend FastAPI 挂 `/static/library` 静态目录，让前端能直接展示 RAG 召回的图（D-4 commit 1 一并落地）
 
 **D-4 Agent 侧接入**
 
