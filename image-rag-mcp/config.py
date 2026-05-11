@@ -11,6 +11,7 @@ _DEFAULT_MILVUS_PORT = "19530"
 _DEFAULT_DASHBOARD_YAML = (
     Path(__file__).resolve().parent.parent / "backend" / "config" / "dashboard.yaml"
 )
+_DEFAULT_LIBRARY_DIR = Path(__file__).resolve().parent / "library_images"
 
 COLLECTION_NAME = "image_library"
 CAPTION_VECTOR_DIM = 2048
@@ -32,6 +33,11 @@ def get_milvus_port() -> str:
 def get_dashboard_yaml_path() -> Path:
     raw = os.getenv("DASHBOARD_YAML_PATH")
     return Path(raw).resolve() if raw else _DEFAULT_DASHBOARD_YAML
+
+
+def get_library_dir() -> Path:
+    raw = os.getenv("IMAGE_LIBRARY_DIR")
+    return Path(raw).resolve() if raw else _DEFAULT_LIBRARY_DIR
 
 
 def load_dashboard_config() -> dict[str, Any]:

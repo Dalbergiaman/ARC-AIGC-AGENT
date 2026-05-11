@@ -56,3 +56,17 @@ backend/config/dashboard.yaml
 
 celerybeat-schedule
 celerybeat.pid
+
+# image
+backend/uploads/*.png
+backend/uploads/*.jpg
+backend/uploads/*.webp
+backend/uploads/*.jpeg
+
+backend/generated/*
+backend/generated/*.png
+backend/generated/*.jpg
+backend/generated/*.webp
+backend/generated/*.jpeg
+# image-rag-mcp local image library
+image-rag-mcp/library_images/

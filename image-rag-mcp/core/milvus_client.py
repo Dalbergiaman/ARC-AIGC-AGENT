@@ -131,3 +131,82 @@ class MilvusImageLibraryClient:
             }
 
         return await asyncio.to_thread(_check)
+
+    async def insert(
+        self,
+        *,
+        image_id: str,
+        caption: str,
+        caption_vector: list[float],
+        image_vector: list[float],
+        style: str,
+        building_type: str,
+        image_url: str,
+    ) -> None:
+        def _insert() -> None:
+            self.collection.insert(
+                [
+                    [image_id],
+                    [caption[:2048]],
+                    [caption_vector],
+                    [image_vector],
+                    [style[:128]],
+                    [building_type[:128]],
+                    [image_url[:1024]],
+                ]
+            )
+            self.collection.flush()
+
+        await asyncio.to_thread(_insert)
+
+    async def search(
+        self,
+        *,
+        vector_field: str,
+        query_vector: list[float],
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        if vector_field not in ("caption_vector", "image_vector"):
+            raise ValueError(f"Unsupported vector field: {vector_field!r}")
+
+        expr = _build_filter_expr(filters)
+
+        def _search() -> list[dict[str, Any]]:
+            params = {"metric_type": "COSINE", "params": {"ef": 64}}
+            results = self.collection.search(
+                data=[query_vector],
+                anns_field=vector_field,
+                param=params,
+                limit=top_k,
+                expr=expr,
+                output_fields=["image_id", "caption", "image_url", "style", "building_type"],
+            )
+            hits = results[0] if results else []
+            return [
+                {
+                    "image_id": hit.entity.get("image_id"),
+                    "caption": hit.entity.get("caption"),
+                    "image_url": hit.entity.get("image_url"),
+                    "style": hit.entity.get("style"),
+                    "building_type": hit.entity.get("building_type"),
+                    "score": float(hit.score),
+                }
+                for hit in hits
+            ]
+
+        return await asyncio.to_thread(_search)
+
+
+def _build_filter_expr(filters: dict[str, str] | None) -> str | None:
+    if not filters:
+        return None
+    clauses: list[str] = []
+    for key, value in filters.items():
+        if key not in ("style", "building_type"):
+            continue
+        if not value:
+            continue
+        safe = value.replace('"', '\\"')
+        clauses.append(f'{key} == "{safe}"')
+    return " and ".join(clauses) if clauses else None

@@ -1494,9 +1494,9 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
 
 **D-3 MCP 工具实现**
 
-- [ ] 编写 `image-rag-mcp/tools/store.py`（`store_generated_image`：VLM caption → embedding → 存 Milvus + PostgreSQL）
-- [ ] 编写 `image-rag-mcp/tools/search.py`（`search_by_text`：文字 → caption_vector 检索，支持可选 `filters: dict[str, str]` 标量过滤（只对非空字段构造 `expr`）；`search_by_image`：图片 → image_vector 检索，同样支持可选 filters）
-- [ ] 编写 `image-rag-mcp/tools/retrieve.py`（`get_image_by_id`：按 image_id 查 PostgreSQL）
+- [x] 编写 `image-rag-mcp/tools/store.py`（`store_generated_image`：VLM caption → embedding → 存 Milvus + PostgreSQL；`style` / `building_type` 从 `design_state` 自动提取）
+- [x] 编写 `image-rag-mcp/tools/search.py`（`search_by_text`：文字 → caption_vector 检索，支持可选 `filters: dict[str, str]` 标量过滤（只对非空字段构造 `expr`）；`search_by_image`：图片 → image_vector 检索，同样支持可选 filters；返回 Milvus 字段 image_id/caption/image_url/style/building_type/score）
+- [x] 编写 `image-rag-mcp/tools/retrieve.py`（`get_image_by_id`：按 image_id 查 PostgreSQL）
 
 **D-4 Agent 侧接入**
 
@@ -1575,7 +1575,7 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
 
 ## 当前状态
 
-**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 临时持久化；E-3 已完成 prompt 实时同步与风格模板独立注入，参数滑块因缺少跨平台通用 API 字段暂缓；E-3.5 已完成会话工作区服务端持久化并通过跨浏览器恢复验证；E-4 已完成生成图片工作区、下载、批注图上传与批注图生图链路；E-5 过程中补齐了中栏图片按比例显示 + 按对话位置锚定、系统生成图下载至 `backend/generated/` 的本地持久化、风格模板去自动注入、SSE 正常关闭时的假性断开提示修复；D-1 已完成 image-rag-mcp 骨架，FastMCP stdio + lifespan 启动 PG/Milvus，`image_library` 表与 Collection（HNSW + INVERTED 索引）幂等创建，`health_check` 工具通过 stdio E2E 验证返回正常；D-2 已完成 VLM caption + 双向量端到端打通，统一为 2048 维（DEV_SPEC 原写 image 3072 维与实际不符，已修正）。
+**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 临时持久化；E-3 已完成 prompt 实时同步与风格模板独立注入，参数滑块因缺少跨平台通用 API 字段暂缓；E-3.5 已完成会话工作区服务端持久化并通过跨浏览器恢复验证；E-4 已完成生成图片工作区、下载、批注图上传与批注图生图链路；E-5 过程中补齐了中栏图片按比例显示 + 按对话位置锚定、系统生成图下载至 `backend/generated/` 的本地持久化、风格模板去自动注入、SSE 正常关闭时的假性断开提示修复；D-1 已完成 image-rag-mcp 骨架，FastMCP stdio + lifespan 启动 PG/Milvus，`image_library` 表与 Collection（HNSW + INVERTED 索引）幂等创建，`health_check` 工具通过 stdio E2E 验证返回正常；D-2 已完成 VLM caption + 双向量端到端打通，统一为 2048 维（DEV_SPEC 原写 image 3072 维与实际不符，已修正）；D-3 已完成 MCP 工具（store_generated_image / search_by_text / search_by_image / get_image_by_id）并通过 stdio E2E 自查（text 检索命中、style 过滤正确、image 自查 score≈1.0、PG 全字段回填）。
 
 **建议执行顺序（2026-05-08 调整）**：
 1. ~~C-6.1~~、~~C-8~~、~~E-1~~：已完成。
@@ -1586,10 +1586,13 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
 6. E-5：全流程联调。
 7. ~~D-1~~：image-rag-mcp 骨架、PG 建表、Milvus Collection 初始化已完成。
 8. ~~D-2~~：VLM caption + caption/image 双向量打通；统一 2048 维。
-9. **D-3 ~ D-4（当前）**：MCP 工具实现（store/search/retrieve）与 Agent 侧接入。
-10. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
+9. ~~D-3~~：MCP 工具（store/search_by_text/search_by_image/get_image_by_id）已实现并通过 stdio E2E 测试。
+10. **D-4（当前）**：Agent 侧接入 + rag_image 候选浮窗（含 VLM 氛围描述、阻塞等待、rag_image 第三槽位）。
+11. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-11：D-3 收尾追加图库副本管理。新增 `image-rag-mcp/core/storage.py`：`save_source_url` 把任意来源（http URL 或 base64 data URL）的图片下载到 `image-rag-mcp/library_images/{image_id}.{ext}`，`library_url_for` 生成短 URL `/static/library/{id}.{ext}`，`resolve_library_url` 把这种短 URL 反解为本地 `Path`。`tools/store.py` 改造：先生成 image_id → 下载源图到本地副本 → 用本地 data URL 跑 caption / 双 embedding → PG/Milvus 都存短 URL；任一插入失败时回滚副本。`tools/search.py` 的 `search_by_image` 加入"短 URL → 本地路径 → data URL"的解析，避免火山方舟拿不到相对 `/static/...` 路径。`scripts/test_d3_stdio.py` 同步更新覆盖：store 后断言磁盘文件存在、搜索结果都是短 URL、`search_by_image` 用短 URL 自查 score≈1.0；cleanup 三件套（PG + Milvus + 本地文件）。`.gitignore` 增加 `image-rag-mcp/library_images/`。**遗留 TODO（D-4 一并处理）**：backend FastAPI 需要把 `image-rag-mcp/library_images/` 挂为 `/static/library` 静态目录，前端才能展示图库召回卡片；可在 `backend/main.py` 的 `app.mount("/static/library", ...)` 中处理，路径通过 `IMAGE_LIBRARY_DIR` 环境变量或 hardcoded 相对路径解析。
+- 2026-05-11：D-3 完成 MCP 工具实现。`core/milvus_client.py` 补齐 `insert` / `search` 两个方法（`search` 支持 `caption_vector` / `image_vector` 两个向量字段，标量过滤仅对 `style` / `building_type` 非空值构造 `expr`，搜索 `ef=64`）；新增 `tools/store.py`（VLM caption → 双 embedding → PG.insert + Milvus.insert，`style` / `building_type` 从 `design_state` 自动提取）、`tools/search.py`（返回 Milvus 字段：image_id / caption / image_url / style / building_type / score，不 join PG）、`tools/retrieve.py`（按 id 查 PG）；`server.py` 注册 4 个新工具。`scripts/test_d3_stdio.py` 通过 stdio E2E 覆盖 store×2→search_by_text→style filter→search_by_image self-match→get_image_by_id→cleanup 全链路；发现 FastMCP 新版 list-返回只走 `structuredContent.result`（不再附 text block），测试 parser 已做兼容。**新设计决策（待 D-4 实现）**：RAG 召回的候选图不再自动注入 prompt，改为 `rag_gate_node` 在中栏对话弹候选浮窗（最多 120s 阻塞，超时默认不选），用户选中后生成图作为 `rag_image` 第三槽位参考图（跟 control_image / annotated_image 并列）；此时对候选图跑一次 VLM 氛围分析得到 "ambience_note"（光线/色彩/氛围为主，非建筑要素），在 `generate_image_node` 拼 prompt 时按"图3 为氛围参考：{note}"追加，enhance_prompt 不感知 rag_image 存在，从而保证图位顺序在 LLM 阶段不被改写；rag_image 不进入 `evaluate_generated_image` 参与评分；rag_image 与 control_image 一起持久化到 `sessions.workspace_state`；旧 `AgentState.similar_cases` 字段与 `agent/prompts.py` 中 `similar_cases` 引用将在 D-4 一并废弃，候选图走 `backend/uploads/` 本地保存（沿用 `storage_service.download_and_save` 通路，以后整体切 MinIO 时统一切）。
 - 2026-05-11：D-2 完成 VLM caption + 双向量端到端。新增 `image-rag-mcp/core/vlm_caption.py`，复用 dashboard.yaml 的 LLM 配置（支持 bailian / volcengine），用 httpx 直调 chat completions（不依赖 backend 包，避免反向依赖），System Prompt 约束输出 2-3 句紧凑中文建筑描述。`scripts/test_d2_smoke.py` 用 `backend/generated/` 下真实生成图（base64 data URL）验证：caption→2048 维文本向量、image→2048 维图像向量。**重要修正**：实测 `doubao-embedding-vision-251215` 是跨模态共享 2048 维空间，文字与图像同维同空间（最大 2048，可降维 1024），并非 DEV_SPEC 原写的 "image 3072 维"。已同步修改 DEV_SPEC 中"火山引擎文本/图像 embedding 实现"与"Milvus Collection / Schema"两处维度描述，`image-rag-mcp/config.py` 中 `IMAGE_VECTOR_DIM` 从 3072 改为 2048，旧 Milvus collection 已 drop 并按 2048 × 2048 重建。境外图（如 Wikipedia）会被火山方舟下载失败，本地图片必须先转 data URL 再调 VLM / image embedding，跟 `agent/tools/image_analysis.py` 的 `_to_data_url` 一致。
 - 2026-05-11：D-1 完成 image-rag-mcp 骨架。新增 `image-rag-mcp/config.py`（PG DSN / Milvus host:port / dashboard.yaml 路径，环境变量优先、本地默认值兜底）、`core/pg_client.py`（asyncpg pool，启动时幂等执行 `CREATE TABLE IF NOT EXISTS image_library` + `insert / get_by_id / get_by_ids / health_check`）、`core/milvus_client.py`（pymilvus 同步 API + `asyncio.to_thread`，幂等创建 Collection 与 HNSW/COSINE 向量索引、`style` / `building_type` INVERTED 标量索引；`insert / search` 留给 D-3）、`server.py`（FastMCP `lifespan` 串起 PG/Milvus 生命周期，注册 `health_check` 工具）。验证两路：直接调 `scripts/test_d1_smoke.py` 检查 schema 与索引；`scripts/test_d1_stdio.py` 通过官方 `mcp.client.stdio` 启动 server 子进程，`list_tools` 拿到 `health_check` 并调用返回 `{"pg": {"ok": true}, "milvus": {"name": "image_library", "indexes": [...]}}`。`insert` / `search` 尚未实现，留给 D-3 与 caption 链路一起做。
 - 2026-05-11：Milvus 升级至 v2.6.15，Attu 升级至 v2.5；清理了 etcd `by-dev` 前缀（14 key）、minio `a-bucket`、`milvus_data` volume（原 v2.4 无业务数据，直接清干净）。移除 docker-compose.yml 中 postgres 的 `init-db.sql` bind mount（WSL2 路径不稳定），改为注释说明手动建库命令；`aigc_image_library` 库已手动创建完毕。pymilvus 客户端已是 2.6.12，与 server v2.6.15 兼容，不需要更新。Milvus v2.6 原生支持 BM25，为后续 hybrid 检索留路，当前 D 阶段仍只做文字向量检索 + 标量过滤。
