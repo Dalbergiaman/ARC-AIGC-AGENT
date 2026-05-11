@@ -673,17 +673,17 @@ class ImageEmbeddingClientBase(ABC):
 
 ### 火山引擎文本实现（`volcengine_text.py`）
 
-- 模型：`doubao-embedding`
-- 向量维度：2048（模型默认值，支持 1024 / 512 降维）
-- 调用方式：httpx POST，OpenAI 兼容 endpoint（`https://ark.cn-beijing.volces.com/api/v3/embeddings`）
+- 模型：`doubao-embedding-vision-251215`（与图像复用同一跨模态模型，文本输入走同一 endpoint）
+- 向量维度：2048
+- 调用方式：httpx POST，多模态 endpoint（`https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal`），input 使用 `{"type": "text", "text": "..."}`
 - 认证：`Authorization: Bearer <api_key>`
 
 ### 火山引擎图像实现（`volcengine_image.py`）
 
 - 模型：`doubao-embedding-vision-251215`
-- 向量维度：3072（模型固定值）
+- 向量维度：2048（跨模态共享空间，文本与图像同维）
 - 调用方式：httpx POST，多模态专用 endpoint（`https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal`）
-- 输入：图片 URL（`{"type": "image_url", "image_url": {"url": "..."}}`）
+- 输入：图片 URL（`{"type": "image_url", "image_url": {"url": "..."}}`），本地文件需转 base64 data URL
 - 认证：`Authorization: Bearer <api_key>`
 
 ### 工厂
@@ -1048,8 +1048,8 @@ image_library (
 **Milvus Collection（向量库）**
 ```
 image_id        # 主键，对应 image_library.id
-caption_vector  # doubao-embedding 生成（文字检索用），2048 维
-image_vector    # doubao-embedding-vision-251215 生成（以图搜图用），3072 维
+caption_vector  # doubao-embedding-vision 生成（caption 文本输入，文字检索用），2048 维
+image_vector    # doubao-embedding-vision 生成（图片输入，以图搜图用），2048 维
 style           # 标量过滤字段
 building_type   # 标量过滤字段
 image_url       # 标量字段，直接返回预览
@@ -1114,7 +1114,7 @@ services:
     ports: ["9001:9001"]
 
   milvus:
-    image: milvusdb/milvus:v2.4.17
+    image: milvusdb/milvus:v2.6.15
     ports: ["19530:19530", "9091:9091"]
     depends_on: [etcd, minio]
 
@@ -1141,7 +1141,7 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/aigc_langfuse
 
   attu:
-    image: zilliz/attu:v2.4
+    image: zilliz/attu:v2.5
     ports: ["8080:3000"]
     depends_on: [milvus]
 ```
@@ -1155,6 +1155,13 @@ Langfuse 3.x 要求 `ENCRYPTION_KEY` 是 64 个十六进制字符（256 bit）�
 注意：后端当前使用 `langfuse>=4.5.1` Python SDK。该 SDK 对应 Langfuse 3.x 主线自托管架构；旧的 `langfuse/langfuse:2` 会因缺少新版 ingestion / OTEL 接口而在 export span batch 时返回 `404 Not Found`。因此本地 compose 已从 Langfuse v2 单容器升级为 Langfuse 3.x 及其依赖服务。
 
 注意：compose 中的 MinIO 是 Milvus standalone 的对象存储依赖，不代表业务上传文件已支持 MinIO。业务文件存储当前默认使用本地 `backend/uploads/`；生产目标仍是补齐 `STORAGE=minio` 分支后切换到 MinIO。
+
+注意：postgres 不再挂载 `init-db.sql` 到容器（WSL2 bind mount 路径不稳定）。首次全新部署（空 postgres_data volume）时需手动建库：
+```bash
+docker exec -it aigc_agent-postgres-1 psql -U postgres -c "CREATE DATABASE aigc_langfuse;"
+docker exec -it aigc_agent-postgres-1 psql -U postgres -c "CREATE DATABASE aigc_image_library;"
+```
+现有部署（postgres_data 已有数据）`aigc_langfuse` 已在历史初始化时建好；`aigc_image_library` 已于 2026-05-11 手动创建完毕。
 
 ---
 
@@ -1446,28 +1453,54 @@ backend/tests/
 
 **D-1 MCP 服务骨架与存储初始化**
 
-- [ ] 编写 `image-rag-mcp/server.py`（FastMCP stdio 入口，注册工具）
-- [ ] 初始化 Milvus Collection（`caption_vector` 2048 维 + `image_vector` 3072 维，标量字段 style / building_type / image_url）
-- [ ] 创建 PostgreSQL `image_library` 表
-- [ ] 编写 `image-rag-mcp/core/pg_client.py`（`image_library` 表 CRUD，`image_id` 作为 Milvus 关联键）
-- [ ] 编写 `image-rag-mcp/core/milvus_client.py`（insert / search 封装）
+- [x] 编写 `image-rag-mcp/config.py`（从环境变量读取连接配置，提供本地默认值；由 backend `MultiServerMCPClient` 的 `env` 字段注入）
+- [x] 编写 `image-rag-mcp/server.py`（FastMCP stdio 入口，lifespan 初始化 PG pool 和 Milvus collection，注册工具，暴露 `health_check` 工具用于启动验证）
+- [x] 编写 `image-rag-mcp/core/pg_client.py`（asyncpg pool，`init_schema` 建表，`insert` / `get_by_id` / `get_by_ids` CRUD；库名 `aigc_image_library` 独立于主业务库）
+- [x] 编写 `image-rag-mcp/core/milvus_client.py`（pymilvus 封装，`init_collection` 建 Collection + HNSW 索引；`insert` / `search` 留给 D-3 实现；启动时幂等初始化）
+- [x] 初始化 Milvus Collection（字段见下方 Schema，启动时自动建好）
+- [x] 验证：`uv run python server.py` 能启动，PG 表和 Milvus Collection 自动建好，`health_check` 工具返回正常
 
-> ⚠️ 注意：Milvus Collection 创建时需指定 `index_type`（推荐 `HNSW`）和 `metric_type`（`IP` 内积或 `L2`），建议用 `IP` + 归一化向量，检索结果更稳定。
+**Milvus Collection Schema（image_library）**
+
+```python
+fields = [
+    FieldSchema("image_id",        DataType.VARCHAR,      is_primary=True, auto_id=False, max_length=36),
+    FieldSchema("caption",         DataType.VARCHAR,      max_length=2048),   # caption 冗余存储，检索时直接返回
+    FieldSchema("caption_vector",  DataType.FLOAT_VECTOR, dim=2048),          # doubao-embedding-vision，caption 文本检索
+    FieldSchema("image_vector",    DataType.FLOAT_VECTOR, dim=2048),          # doubao-embedding-vision，以图搜图
+    FieldSchema("style",           DataType.VARCHAR,      max_length=128),    # 标量过滤
+    FieldSchema("building_type",   DataType.VARCHAR,      max_length=128),    # 标量过滤
+    FieldSchema("image_url",       DataType.VARCHAR,      max_length=1024),   # 仅返回，不过滤
+]
+# 向量索引：两个向量字段均用 HNSW + COSINE，M=16, efConstruction=200，搜索时 ef=64
+# 标量索引：style / building_type 用 INVERTED 索引加速过滤；image_url 不建索引
+```
+
+**环境变量（image-rag-mcp/config.py）**
+
+```
+IMAGE_LIBRARY_PG_DSN       postgresql://postgres:postgres@localhost:5432/aigc_image_library
+MILVUS_HOST                localhost
+MILVUS_PORT                19530
+DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 配置复用主服务
+```
+
+> ⚠️ 注意：`aigc_image_library` 是独立 PostgreSQL 库（方案 A），与主业务库 `aigc_agent` 分开，image-rag-mcp 和 backend 各自维护自己的连接。Milvus Collection 在 MCP 启动时幂等创建，不需要额外初始化脚本。
 
 **D-2 VLM Caption 与向量化**
 
-- [ ] 编写 `image-rag-mcp/core/vlm_caption.py`（读取 dashboard.yaml 中的 LLM 配置，调用 `ainvoke_with_vision` 生成图片描述）
-- [ ] 调用 `TextEmbeddingFactory` 生成 caption 文本向量（2048 维），调用 `ImageEmbeddingFactory` 生成图片向量（3072 维）
+- [x] 编写 `image-rag-mcp/core/vlm_caption.py`（读取 dashboard.yaml 中的 LLM 配置，httpx 直调 VLM chat completions，生成 2-3 句检索用中文描述）
+- [x] 调用 `TextEmbeddingFactory` 生成 caption 文本向量（2048 维），调用 `ImageEmbeddingFactory` 生成图片向量（2048 维，跨模态共享空间）
 
 **D-3 MCP 工具实现**
 
 - [ ] 编写 `image-rag-mcp/tools/store.py`（`store_generated_image`：VLM caption → embedding → 存 Milvus + PostgreSQL）
-- [ ] 编写 `image-rag-mcp/tools/search.py`（`search_by_text`：文字 → 文本 embedding → Milvus 检索；`search_by_image`：图片 → 图像 embedding → Milvus 检索）
+- [ ] 编写 `image-rag-mcp/tools/search.py`（`search_by_text`：文字 → caption_vector 检索，支持可选 `filters: dict[str, str]` 标量过滤（只对非空字段构造 `expr`）；`search_by_image`：图片 → image_vector 检索，同样支持可选 filters）
 - [ ] 编写 `image-rag-mcp/tools/retrieve.py`（`get_image_by_id`：按 image_id 查 PostgreSQL）
 
 **D-4 Agent 侧接入**
 
-- [ ] 编写 `agent/tools/search_library.py`（`search_similar_cases`：通过 MCP `search_by_text` 检索，结果存入 `AgentState.similar_cases`）
+- [ ] 编写 `agent/tools/search_library.py`（`search_similar_cases`：调用 MCP `search_by_text`，将 `design_state.building_type` / `style` 非空字段作为标量过滤传入，结果存入 `AgentState.similar_cases`；`search_by_image` 工具暴露但 Agent 侧暂不调用，待后续观察文字检索效果后决定）
 - [ ] 在 `agent/graph.py` 初始化时启动 `MultiServerMCPClient`，将 MCP 检索工具合并进工具列表
 - [ ] 端到端测试：存一张图 → 检索 → 验证结果返回正确
 
@@ -1542,7 +1575,7 @@ backend/tests/
 
 ## 当前状态
 
-**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 临时持久化；E-3 已完成 prompt 实时同步与风格模板独立注入，参数滑块因缺少跨平台通用 API 字段暂缓；E-3.5 已完成会话工作区服务端持久化并通过跨浏览器恢复验证；E-4 已完成生成图片工作区、下载、批注图上传与批注图生图链路；E-5 过程中补齐了中栏图片按比例显示 + 按对话位置锚定、系统生成图下载至 `backend/generated/` 的本地持久化、风格模板去自动注入、SSE 正常关闭时的假性断开提示修复；当前继续进行 E-5 全流程联调。
+**阶段**：A-1 ~ A-4、B-1 ~ B-4 已完成；C-1 ~ C-6 已初步完成；C-6.1 已完成代码硬化与 Redis/Postgres 集成验证；C-8 已完成 Dashboard 配置、前端类型/UI、`agent_graph.mmd` 和文档漂移修正；E-1 已完成三栏工作台骨架、纯文字对话与最小会话恢复；E-2 已完成参考图上传/意图/发送标记/payload 扩展/localStorage 临时持久化；E-3 已完成 prompt 实时同步与风格模板独立注入，参数滑块因缺少跨平台通用 API 字段暂缓；E-3.5 已完成会话工作区服务端持久化并通过跨浏览器恢复验证；E-4 已完成生成图片工作区、下载、批注图上传与批注图生图链路；E-5 过程中补齐了中栏图片按比例显示 + 按对话位置锚定、系统生成图下载至 `backend/generated/` 的本地持久化、风格模板去自动注入、SSE 正常关闭时的假性断开提示修复；D-1 已完成 image-rag-mcp 骨架，FastMCP stdio + lifespan 启动 PG/Milvus，`image_library` 表与 Collection（HNSW + INVERTED 索引）幂等创建，`health_check` 工具通过 stdio E2E 验证返回正常；D-2 已完成 VLM caption + 双向量端到端打通，统一为 2048 维（DEV_SPEC 原写 image 3072 维与实际不符，已修正）。
 
 **建议执行顺序（2026-05-08 调整）**：
 1. ~~C-6.1~~、~~C-8~~、~~E-1~~：已完成。
@@ -1551,10 +1584,16 @@ backend/tests/
 4. ~~E-3.5~~：已完成将 prompt 草稿、参考图会话状态、生成任务结果从 `localStorage` / 前端内存迁移到 PostgreSQL；这是 E-4 前置，避免生成图工作区做完后因刷新恢复能力返工。
 5. ~~E-4~~：已完成生成图批注下载、禁用图库占位、批注图作为 `annotated_image` 回传；多图 provider 请求按 control image、annotated image 顺序构造。
 6. E-5：全流程联调。
-7. D-1 ~ D-4：image-rag-mcp 图库、Milvus/PG 存储与检索，替换 `search_similar_cases` stub。
-8. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
+7. ~~D-1~~：image-rag-mcp 骨架、PG 建表、Milvus Collection 初始化已完成。
+8. ~~D-2~~：VLM caption + caption/image 双向量打通；统一 2048 维。
+9. **D-3 ~ D-4（当前）**：MCP 工具实现（store/search/retrieve）与 Agent 侧接入。
+10. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-11：D-2 完成 VLM caption + 双向量端到端。新增 `image-rag-mcp/core/vlm_caption.py`，复用 dashboard.yaml 的 LLM 配置（支持 bailian / volcengine），用 httpx 直调 chat completions（不依赖 backend 包，避免反向依赖），System Prompt 约束输出 2-3 句紧凑中文建筑描述。`scripts/test_d2_smoke.py` 用 `backend/generated/` 下真实生成图（base64 data URL）验证：caption→2048 维文本向量、image→2048 维图像向量。**重要修正**：实测 `doubao-embedding-vision-251215` 是跨模态共享 2048 维空间，文字与图像同维同空间（最大 2048，可降维 1024），并非 DEV_SPEC 原写的 "image 3072 维"。已同步修改 DEV_SPEC 中"火山引擎文本/图像 embedding 实现"与"Milvus Collection / Schema"两处维度描述，`image-rag-mcp/config.py` 中 `IMAGE_VECTOR_DIM` 从 3072 改为 2048，旧 Milvus collection 已 drop 并按 2048 × 2048 重建。境外图（如 Wikipedia）会被火山方舟下载失败，本地图片必须先转 data URL 再调 VLM / image embedding，跟 `agent/tools/image_analysis.py` 的 `_to_data_url` 一致。
+- 2026-05-11：D-1 完成 image-rag-mcp 骨架。新增 `image-rag-mcp/config.py`（PG DSN / Milvus host:port / dashboard.yaml 路径，环境变量优先、本地默认值兜底）、`core/pg_client.py`（asyncpg pool，启动时幂等执行 `CREATE TABLE IF NOT EXISTS image_library` + `insert / get_by_id / get_by_ids / health_check`）、`core/milvus_client.py`（pymilvus 同步 API + `asyncio.to_thread`，幂等创建 Collection 与 HNSW/COSINE 向量索引、`style` / `building_type` INVERTED 标量索引；`insert / search` 留给 D-3）、`server.py`（FastMCP `lifespan` 串起 PG/Milvus 生命周期，注册 `health_check` 工具）。验证两路：直接调 `scripts/test_d1_smoke.py` 检查 schema 与索引；`scripts/test_d1_stdio.py` 通过官方 `mcp.client.stdio` 启动 server 子进程，`list_tools` 拿到 `health_check` 并调用返回 `{"pg": {"ok": true}, "milvus": {"name": "image_library", "indexes": [...]}}`。`insert` / `search` 尚未实现，留给 D-3 与 caption 链路一起做。
+- 2026-05-11：Milvus 升级至 v2.6.15，Attu 升级至 v2.5；清理了 etcd `by-dev` 前缀（14 key）、minio `a-bucket`、`milvus_data` volume（原 v2.4 无业务数据，直接清干净）。移除 docker-compose.yml 中 postgres 的 `init-db.sql` bind mount（WSL2 路径不稳定），改为注释说明手动建库命令；`aigc_image_library` 库已手动创建完毕。pymilvus 客户端已是 2.6.12，与 server v2.6.15 兼容，不需要更新。Milvus v2.6 原生支持 BM25，为后续 hybrid 检索留路，当前 D 阶段仍只做文字向量检索 + 标量过滤。
+- 2026-05-11：确定 image-rag-mcp D 阶段核心设计：PG 使用独立库 `aigc_image_library`（方案 A），连接配置通过环境变量传入；Milvus Collection 字段含 `image_id`（VARCHAR 36 主键）、`caption`（冗余存储，免回 PG）、`caption_vector`（2048 维）、`image_vector`（3072 维）、`style`/`building_type`（VARCHAR 128，INVERTED 索引）、`image_url`（VARCHAR 1024）；向量索引 HNSW + COSINE，M=16, efConstruction=200；Agent 侧 D-4 只调 `search_by_text` + 标量过滤，`search_by_image` 工具暴露但暂不接入 Agent，待观察效果后决定。
 - 2026-05-10：E-5 联调过程中修复四类问题并合并到一次 commit（`50cdb7e`）。
   1. 中栏生成图展示：移除 `h-40 w-full object-cover` 固定尺寸，改为 `w-full h-auto` 按原始比例自适应；`GenerationPreview` 新增 `assistantMessageId`，实时生成时在 `chatStore.upsertGenerationPreview` 中绑定 `currentAssistantMessageId`，历史会话加载时按 `messages.created_at` 与 `generation_tasks.created_at` 做时间夹挤回填；`MessageList` 按关联 id 把图片渲染在对应 assistant 消息下，兜底保留末尾未关联渲染。后端 `message_id` 列暂不加，保持现状。
   2. 系统生成图持久化：云端 provider 返回的临时 URL 过期会导致历史会话图片失效。新增 `backend/generated/` 目录与 `STATIC /static/generated` 挂载；`storage_service.download_and_save_generated_image()` 在 Celery worker 拿到 provider URL 后立即下载到本地，`image_task._async_generate` 将本地路径写回 `image_url`。目录按语义与用户上传 `uploads/` 拆开；`save_generated_image_base64` 顺手迁到 `generated/`，但它目前仍是死代码。
