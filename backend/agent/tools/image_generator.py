@@ -178,6 +178,11 @@ async def generate_image(
                     status_message=f"generation task failed: {result.result}",
                     metadata={"task_id": task.id},
                 )
+                await emitter.emit("generation_error", {
+                    "task_id": task.id,
+                    "run_id": run_id,
+                    "reason": "task_failed",
+                })
                 raise RuntimeError(f"generation task failed: {result.result}")
 
     # Timeout
@@ -187,4 +192,9 @@ async def generate_image(
         status_message=f"generation timed out after {_TIMEOUT_SECONDS}s",
         metadata={"task_id": task.id},
     )
+    await emitter.emit("generation_error", {
+        "task_id": task.id,
+        "run_id": run_id,
+        "reason": "timeout",
+    })
     raise TimeoutError(f"generation timed out after {_TIMEOUT_SECONDS}s")

@@ -664,6 +664,10 @@ async def generate_image_node(state: AgentState) -> dict:
         )
     except TimeoutError:
         update_current_span(level="WARNING", status_message="generation timeout")
+        await emitter.emit("generation_error", {
+            "task_id": state.get("current_task_id", ""),
+            "reason": "timeout",
+        })
         return {
             "retry_count": retry_count + 1,
             "phase": "evaluating",
@@ -671,6 +675,12 @@ async def generate_image_node(state: AgentState) -> dict:
     except asyncio.CancelledError:
         update_current_span(level="WARNING", status_message="generation interrupted")
         return {"phase": "interrupted"}
+    except RuntimeError as exc:
+        update_current_span(level="ERROR", status_message=str(exc))
+        return {
+            "retry_count": retry_count + 1,
+            "phase": "evaluating",
+        }
 
     generation_results = list(state.get("generation_results") or [])
     generation_results.append(gen_result)

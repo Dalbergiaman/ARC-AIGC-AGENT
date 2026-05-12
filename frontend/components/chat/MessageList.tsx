@@ -17,18 +17,15 @@ function PreviewGrid({ previews }: { previews: GenerationPreview[] }) {
   const visible = previews.filter((p) => p.imageUrl);
   if (!visible.length) return null;
   return (
-    <div className="mt-3 grid gap-3 md:grid-cols-2">
+    <div className="mt-3 flex flex-wrap gap-2">
       {visible.map((preview) => (
-        <div key={preview.taskId} className="overflow-hidden rounded-2xl border border-black/8 bg-white">
+        <div key={preview.taskId} className="overflow-hidden rounded-lg border border-black/8 bg-white">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={resolveImageUrl(preview.imageUrl!)}
             alt="生成结果缩略图"
-            className="w-full h-auto"
+            className="h-32 w-auto object-contain"
           />
-          <div className="border-t border-black/6 px-3 py-2 text-xs text-muted-foreground">
-            task: {preview.taskId}
-          </div>
         </div>
       ))}
     </div>
@@ -87,18 +84,15 @@ export function MessageList({ messages, activeToolStatus, generationPreviews }: 
       })}
 
       {unanchored.length > 0 ? (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="flex flex-wrap gap-2">
           {unanchored.map((preview) => (
-            <div key={preview.taskId} className="overflow-hidden rounded-2xl border border-black/8 bg-white">
+            <div key={preview.taskId} className="overflow-hidden rounded-lg border border-black/8 bg-white">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={resolveImageUrl(preview.imageUrl!)}
                 alt="生成结果缩略图"
-                className="w-full h-auto"
+                className="h-32 w-auto object-contain"
               />
-              <div className="border-t border-black/6 px-3 py-2 text-xs text-muted-foreground">
-                task: {preview.taskId}
-              </div>
             </div>
           ))}
         </div>

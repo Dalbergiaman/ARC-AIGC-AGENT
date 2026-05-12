@@ -31,7 +31,8 @@ class VolcengineClient(ImageGeneratorBase):
 
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(self._endpoint, headers=headers, json=payload)
-            response.raise_for_status()
+            if not response.is_success:
+                raise ValueError(f"Volcengine API error {response.status_code}: {response.text}")
             data = response.json()
 
         image_url = data["data"][0]["url"]

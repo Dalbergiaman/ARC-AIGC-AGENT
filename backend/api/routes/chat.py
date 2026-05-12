@@ -400,13 +400,14 @@ async def _generate_sse(
 
                 if event_type == "reference_image_update" and isinstance(data.get("image_url"), str):
                     analysis = dict(data)
+                    file_id = str(data.get("file_id") or "")
                     await upsert_reference_images(
                         db,
                         session_id,
                         [
                             {
-                                "file_id": str(data.get("file_id") or data.get("image_url")),
-                                "url": str(data.get("image_url")),
+                                "file_id": file_id,
+                                "url": "",  # upsert keeps existing url when empty
                                 "analysis": {
                                     **analysis,
                                     "intent": data.get("reference_intent", ""),
@@ -417,6 +418,19 @@ async def _generate_sse(
                         ],
                     )
                     continue
+
+                if event_type == "generation_error" and isinstance(data.get("task_id"), str):
+                    result = await db.execute(
+                        select(GenerationTask)
+                        .where(GenerationTask.session_id == session_id)
+                        .where(GenerationTask.task_id == str(data.get("task_id")))
+                        .order_by(GenerationTask.created_at.desc())
+                        .limit(1)
+                    )
+                    task_row = result.scalar_one_or_none()
+                    if task_row is not None:
+                        task_row.status = "failed"
+                        await db.commit()
 
                 if event_type == "generation_start" and isinstance(data.get("task_id"), str):
                     workspace_payload = json.loads(workspace_raw) if workspace_raw else {}

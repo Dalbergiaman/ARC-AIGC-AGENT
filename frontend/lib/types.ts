@@ -146,6 +146,7 @@ export type SSEEventPayloadMap = {
   };
   rag_image_update: RagImageState;
   error: { code: string; message: string };
+  generation_error: { task_id: string; run_id?: string; reason?: string };
   done: { finish_reason: "stop" | "max_retries" | "interrupted" };
 };
 

@@ -67,6 +67,7 @@ export function ChatWorkspace({ sessionId }: Props) {
     setToolStatus,
     upsertGenerationPreview,
     setGenerationPreviews,
+    failRunningPreviews,
     setErrorMessage,
     resetConversation,
   } = useChatStore();
@@ -192,7 +193,9 @@ export function ChatWorkspace({ sessionId }: Props) {
               runId: undefined,
               score: item.score ?? null,
               provider: item.provider ?? null,
-              status: item.status,
+              // Treat any persisted "running" without an image as failed — the task
+              // never completed and will never resume after a page reload.
+              status: (!item.image_url && item.status === "running") ? "failed" : item.status,
               prompt: item.prompt,
               negativePrompt: item.negative_prompt ?? null,
               rawResponse: item.raw_response ?? null,
@@ -310,6 +313,9 @@ export function ChatWorkspace({ sessionId }: Props) {
       });
       setActiveTab("images");
     },
+    onGenerationError: (taskId) => {
+      upsertGenerationPreview({ taskId, status: "failed" });
+    },
     onPromptUpdate: (keywords, llmDescription, customDescription, negativePrompt, promptTemplate) => {
       setSessionPromptDraft(sessionId, {
         keywords,
@@ -338,6 +344,7 @@ export function ChatWorkspace({ sessionId }: Props) {
       if (reply) {
         replaceAssistantText(reply);
       }
+      failRunningPreviews();
       setStreamState("idle");
       finalizeAssistantMessage();
       setStreamId(null);

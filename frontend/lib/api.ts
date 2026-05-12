@@ -87,6 +87,13 @@ export function submitChatMessage(
   });
 }
 
+export async function deleteUpload(fileId: string): Promise<void> {
+  await fetch(`${getApiBaseUrl()}/api/upload/${fileId}`, {
+    method: "DELETE",
+    cache: "no-store",
+  });
+}
+
 export type GalleryImage = {
   url: string;
   mtime: number;
@@ -94,4 +101,18 @@ export type GalleryImage = {
 
 export function listGalleryImages(): Promise<GalleryImage[]> {
   return requestJson<GalleryImage[]>("/api/gallery/images");
+}
+
+export function storeImageToLibrary(payload: {
+  image_url: string;
+  prompt: string;
+  session_id?: string;
+  negative_prompt?: string;
+  provider?: string;
+  design_state?: Record<string, unknown>;
+}): Promise<{ image_id: string }> {
+  return requestJson<{ image_id: string }>("/api/library/store", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }

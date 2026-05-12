@@ -19,7 +19,7 @@ type Handlers = {
   onGenerationStart?: (taskId: string, runId?: string) => void;
   onGenerationDone?: (payload: {
     taskId: string;
-    imageUrl: string;
+    imageUrl?: string;
     runId?: string;
     provider?: string | null;
     score?: number | null;
@@ -28,6 +28,7 @@ type Handlers = {
     negativePrompt?: string | null;
     rawResponse?: Record<string, unknown> | null;
   }) => void;
+  onGenerationError?: (taskId: string, runId?: string) => void;
   onPromptUpdate?: (
     keywords: Record<string, string>,
     llmDescription: string,
@@ -57,6 +58,7 @@ export function useSSE({
   onToolEnd,
   onGenerationStart,
   onGenerationDone,
+  onGenerationError,
   onPromptUpdate,
   onRagCandidates,
   onRagImageUpdate,
@@ -83,6 +85,7 @@ export function useSSE({
       onToolEnd,
       onGenerationStart,
       onGenerationDone,
+      onGenerationError,
       onPromptUpdate,
       onRagCandidates,
       onRagImageUpdate,
@@ -93,6 +96,7 @@ export function useSSE({
     onDone,
     onError,
     onGenerationDone,
+    onGenerationError,
     onGenerationStart,
     onPromptUpdate,
     onRagCandidates,
@@ -139,12 +143,11 @@ export function useSSE({
       }
       if (
         eventType === "generation_done" &&
-        typeof data.task_id === "string" &&
-        typeof data.image_url === "string"
+        typeof data.task_id === "string"
       ) {
         handlers.onGenerationDone?.({
           taskId: data.task_id,
-          imageUrl: data.image_url,
+          imageUrl: typeof data.image_url === "string" ? data.image_url : undefined,
           runId: typeof data.run_id === "string" ? data.run_id : undefined,
           provider: typeof data.provider === "string" ? data.provider : null,
           score: typeof data.score === "number" ? data.score : null,
@@ -156,8 +159,13 @@ export function useSSE({
             : null,
         });
       }
+      if (eventType === "generation_error" && typeof data.task_id === "string") {
+        handlers.onGenerationError?.(
+          data.task_id,
+          typeof data.run_id === "string" ? data.run_id : undefined,
+        );
+      }
       if (
-        eventType === "prompt_update" &&
         data.keywords &&
         typeof data.llm_description === "string" &&
         typeof data.custom_description === "string" &&
@@ -201,6 +209,8 @@ export function useSSE({
       handleEvent("generation_start", event);
     const generationDoneListener = (event: MessageEvent<string>) =>
       handleEvent("generation_done", event);
+    const generationErrorListener = (event: MessageEvent<string>) =>
+      handleEvent("generation_error", event);
     const promptUpdateListener = (event: MessageEvent<string>) =>
       handleEvent("prompt_update", event);
     const ragCandidatesListener = (event: MessageEvent<string>) =>
@@ -215,6 +225,7 @@ export function useSSE({
     eventSource.addEventListener("tool_end", toolEndListener);
     eventSource.addEventListener("generation_start", generationStartListener);
     eventSource.addEventListener("generation_done", generationDoneListener);
+    eventSource.addEventListener("generation_error", generationErrorListener);
     eventSource.addEventListener("prompt_update", promptUpdateListener);
     eventSource.addEventListener("rag_candidates", ragCandidatesListener);
     eventSource.addEventListener("rag_image_update", ragImageUpdateListener);

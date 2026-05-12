@@ -1,7 +1,7 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from services.storage_service import save_upload
+from services.storage_service import delete_upload, save_upload
 
 
 router = APIRouter(prefix="/api", tags=["upload"])
@@ -21,3 +21,8 @@ async def upload_image(file: UploadFile = File(...)) -> UploadResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except NotImplementedError as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
+
+
+@router.delete("/upload/{file_id}", status_code=204)
+async def delete_uploaded_image(file_id: str) -> None:
+    delete_upload(file_id)

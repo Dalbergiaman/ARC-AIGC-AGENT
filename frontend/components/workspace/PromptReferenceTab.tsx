@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Upload, X } from "lucide-react";
 
-import { getApiBaseUrl, listStyleTemplates } from "@/lib/api";
+import { getApiBaseUrl, deleteUpload, listStyleTemplates } from "@/lib/api";
 import { useWorkspaceStore } from "@/store/workspaceStore";
 import type { ReferenceIntent, StyleTemplate } from "@/lib/types";
 
@@ -287,7 +287,10 @@ export function PromptReferenceTab({ sessionId }: Props) {
             </div>
             <button
               type="button"
-              onClick={() => removeControlImage(sessionId)}
+              onClick={() => {
+                deleteUpload(controlImage.fileId);
+                removeControlImage(sessionId);
+              }}
               className="self-start rounded-md p-0.5 text-muted-foreground hover:text-foreground"
               aria-label="删除 Control Image"
             >
@@ -386,7 +389,10 @@ export function PromptReferenceTab({ sessionId }: Props) {
 
                 <button
                   type="button"
-                  onClick={() => removeReferenceImage(sessionId, img.fileId)}
+                  onClick={() => {
+                    deleteUpload(img.fileId);
+                    removeReferenceImage(sessionId, img.fileId);
+                  }}
                   className="self-start rounded-md p-0.5 text-muted-foreground hover:text-foreground"
                   aria-label="删除参考图"
                 >

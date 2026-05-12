@@ -24,6 +24,7 @@ type ChatStore = {
   setToolStatus: (status: ToolStatus | null) => void;
   upsertGenerationPreview: (preview: GenerationPreview) => void;
   setGenerationPreviews: (previews: GenerationPreview[]) => void;
+  failRunningPreviews: () => void;
   setErrorMessage: (message: string | null) => void;
   resetConversation: () => void;
 };
@@ -137,10 +138,23 @@ export const useChatStore = create<ChatStore>((set) => ({
       }
 
       const next = [...state.generationPreviews];
-      next[existing] = { ...next[existing], ...preview };
+      const merged = { ...next[existing], ...preview };
+      // Don't overwrite an existing imageUrl with undefined/null
+      if (!preview.imageUrl && next[existing].imageUrl) {
+        merged.imageUrl = next[existing].imageUrl;
+      }
+      next[existing] = merged;
       return { generationPreviews: next };
     }),
   setGenerationPreviews: (generationPreviews) => set({ generationPreviews }),
+  failRunningPreviews: () =>
+    set((state) => ({
+      generationPreviews: state.generationPreviews.map((item) =>
+        !item.imageUrl && (!item.status || item.status === "running")
+          ? { ...item, status: "failed" }
+          : item,
+      ),
+    })),
   setErrorMessage: (errorMessage) => set({ errorMessage }),
   resetConversation: () =>
     set({

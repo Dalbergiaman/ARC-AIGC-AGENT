@@ -119,6 +119,15 @@ async def download_and_save_library_image(url: str) -> tuple[str, str]:
     return _save_bytes(resp.content, _suffix_from_content_type(content_type))
 
 
+def delete_upload(file_id: str) -> bool:
+    """Delete an uploaded file by its file_id (UUID). Returns True if deleted."""
+    upload_dir = Path(settings.UPLOAD_DIR)
+    for path in upload_dir.glob(f"{file_id}.*"):
+        path.unlink(missing_ok=True)
+        return True
+    return False
+
+
 def save_generated_image_base64(base64_data: str, content_type: str = "image/png") -> str:
     validate_image_mime_type(content_type)
 
