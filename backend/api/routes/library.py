@@ -2,13 +2,22 @@ from __future__ import annotations
 
 from typing import Any
 
+import redis.asyncio as aioredis
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from config import settings
 from services import library_service
 from services.storage_service import download_and_save_library_image
 
 router = APIRouter(prefix="/api/library", tags=["library"])
+
+
+# rag_gate uses this key to detect a user pick; TTL slightly above the blocking
+# timeout so the key cannot outlive a single rag_gate cycle.
+RAG_PICK_KEY = "rag_pick:{session_id}:{run_id}"
+RAG_PICK_SKIP_VALUE = ""
+_RAG_PICK_TTL_PADDING = 60
 
 
 class StoreRequest(BaseModel):
@@ -27,6 +36,12 @@ class SelectRequest(BaseModel):
 class SelectResponse(BaseModel):
     file_id: str
     url: str
+
+
+class PickRequest(BaseModel):
+    session_id: str
+    run_id: str
+    image_id: str | None = None  # None means user clicked "skip"
 
 
 @router.post("/store")
@@ -67,3 +82,21 @@ async def select_image(request: Request, body: SelectRequest) -> SelectResponse:
     except NotImplementedError as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
     return SelectResponse(file_id=file_id, url=url)
+
+
+@router.post("/pick")
+async def pick_candidate(body: PickRequest) -> dict[str, Any]:
+    """Record the user's choice from the rag_candidates popup.
+
+    rag_gate_node polls this key while blocking the run. Value is either the
+    chosen image_id or an empty string sentinel for skip.
+    """
+    key = RAG_PICK_KEY.format(session_id=body.session_id, run_id=body.run_id)
+    value = body.image_id if body.image_id else RAG_PICK_SKIP_VALUE
+    ttl = settings.RAG_BLOCKING_TIMEOUT + _RAG_PICK_TTL_PADDING
+    r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    try:
+        await r.set(key, value, ex=ttl)
+    finally:
+        await r.aclose()
+    return {"ok": True, "picked": body.image_id or None}

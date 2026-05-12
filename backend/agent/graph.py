@@ -21,6 +21,8 @@ from agent.state_utils import (
 from agent.tools.image_analysis import analyze_reference_image
 from agent.tools.image_evaluator import evaluate_generated_image
 from agent.tools.image_generator import NullEmitter, generate_image
+from api.routes.library import RAG_PICK_KEY, RAG_PICK_SKIP_VALUE
+from config import settings
 from core.llm.streaming import get_current_emitter
 from agent.tools.prompt_builder import EnhancedPrompt, enhance_prompt, refine_prompt
 from core.llm.client import LLMClient
@@ -382,11 +384,17 @@ async def agent_node(state: AgentState) -> dict:
 
 @observe(name="node:rag_gate")
 async def rag_gate_node(state: AgentState) -> dict:
-    """Call MCP search_by_text and stash candidates in state.
+    """Search MCP library, then optionally block for user candidate pick.
 
-    This commit only wires the real retrieval — SSE push and user-pick
-    blocking land in commit 3. Downstream nodes ignore
-    ``pending_rag_candidates`` until commit 4 adds rag_image assembly.
+    When RAG_BLOCKING_ENABLED is False (default during development):
+      - Runs the search and stashes candidates in state; no SSE, no blocking.
+
+    When RAG_BLOCKING_ENABLED is True:
+      - Emits a ``rag_candidates`` SSE event so the frontend can show the popup.
+      - Polls Redis for ``rag_pick:{session_id}:{run_id}`` (1 s interval, up to
+        RAG_BLOCKING_TIMEOUT seconds).
+      - Exits on: pick (writes ``_picked_image_id``), skip sentinel, timeout
+        (treated as skip), or cancel flag (raises CancelledError).
     """
     design_state = dict(state.get("design_state") or {})
     building_type = design_state.get("building_type", "")
@@ -437,7 +445,73 @@ async def rag_gate_node(state: AgentState) -> dict:
         input={"query": query, "filters": filters},
         output={"searched": True, "candidate_count": len(candidates)},
     )
-    return {"pending_rag_candidates": candidates}
+
+    if not candidates or not settings.RAG_BLOCKING_ENABLED:
+        return {"pending_rag_candidates": candidates}
+
+    # --- Blocking path (RAG_BLOCKING_ENABLED=True) ---
+    session_id = str(state.get("turn_id") or "")
+    run_id = str(state.get("run_id") or "")
+
+    emitter = get_current_emitter()
+    if emitter is not None:
+        await emitter.emit("rag_candidates", {
+            "candidates": candidates,
+            "timeout": settings.RAG_BLOCKING_TIMEOUT,
+        })
+
+    picked_image_id = await _poll_for_rag_pick(
+        session_id=session_id,
+        run_id=run_id,
+        timeout=settings.RAG_BLOCKING_TIMEOUT,
+    )
+
+    out: dict = {"pending_rag_candidates": candidates}
+    if picked_image_id:
+        out["_picked_image_id"] = picked_image_id
+        update_current_span(output={"picked_image_id": picked_image_id})
+    return out
+
+
+async def _poll_for_rag_pick(
+    session_id: str,
+    run_id: str,
+    timeout: int,
+) -> str | None:
+    """Poll Redis until the user picks a candidate, skips, cancels, or times out.
+
+    Returns the picked image_id string, or None for skip/timeout/cancel.
+    Raises asyncio.CancelledError if the run was cancelled by a new message.
+    """
+    from redis.asyncio import Redis
+
+    pick_key = RAG_PICK_KEY.format(session_id=session_id, run_id=run_id)
+    cancel_key = f"cancel:{session_id}:{run_id}"
+    max_polls = timeout  # 1 s per poll
+
+    redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    try:
+        for _ in range(max_polls):
+            await asyncio.sleep(1)
+
+            # Check cancel flag first (new message from user)
+            if run_id and session_id:
+                if await redis.exists(cancel_key):
+                    raise asyncio.CancelledError(
+                        f"rag_gate interrupted by new message (run_id={run_id})"
+                    )
+
+            # Check pick key
+            value = await redis.get(pick_key)
+            if value is not None:
+                await redis.delete(pick_key)
+                if value == RAG_PICK_SKIP_VALUE:
+                    return None  # user clicked skip
+                return value  # image_id string
+    finally:
+        await redis.aclose()
+
+    return None  # timeout — treat as skip
 
 
 @observe(name="node:enhance_prompt")

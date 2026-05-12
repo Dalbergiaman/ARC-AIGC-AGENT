@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     IMAGE_LIBRARY_DIR: str = str(_REPO_ROOT / "image-rag-mcp" / "library_images")
     IMAGE_RAG_MCP_SERVER: str = str(_REPO_ROOT / "image-rag-mcp" / "server.py")
     IMAGE_RAG_MCP_PYTHON: str = str(_REPO_ROOT / "image-rag-mcp" / ".venv" / "bin" / "python")
+    RAG_BLOCKING_ENABLED: bool = False
+    RAG_BLOCKING_TIMEOUT: int = 600
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

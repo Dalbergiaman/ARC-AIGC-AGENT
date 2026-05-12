@@ -147,6 +147,9 @@ async def submit_message(
         if previous_run and previous_run != stream_id:
             cancel_key = _CANCEL_KEY.format(session_id=session_id, stream_id=previous_run)
             await r.set(cancel_key, "1", ex=_RUN_TTL)
+            # Also clear any pending rag_pick so rag_gate_node sees the cancel flag
+            rag_pick_key = f"rag_pick:{session_id}:{previous_run}"
+            await r.delete(rag_pick_key)
         await r.set(active_key, stream_id, ex=_RUN_TTL)
 
         pending_key = f"pending:{session_id}:{stream_id}"

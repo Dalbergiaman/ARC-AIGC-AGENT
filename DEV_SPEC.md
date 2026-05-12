@@ -1539,7 +1539,7 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
   - 新增 `RagImage` TypedDict（file_id / image_url / source_image_id / ambience_note / sent）
   - `rag_gate_node` 调真实 MCP `search_by_text`，只把候选写进 state，**先不推 SSE、不阻塞**（commit 3 补）
   - 验证：纯文字对话正常完成；similar_cases 字段消失；rag_gate 调真实 MCP 不报错
-- [ ] **Commit 3 — Emit rag_candidates SSE and block run for user pick**
+- [x] **Commit 3 — Emit rag_candidates SSE and block run for user pick**
   - `core/llm/streaming.py` 新增 `rag_candidates` SSE 事件类型
   - `rag_gate_node` 增强：召回后推 `rag_candidates`，然后 Redis 长轮询（1s 一次，最多 600s，env `RAG_BLOCKING_TIMEOUT=600`）
   - 轮询同时检 `rag_pick:{session_id}:{run_id}` 和 `cancel:{session_id}:{run_id}`；cancel 命中抛 `CancelledError`
