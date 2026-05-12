@@ -75,7 +75,9 @@ export function ChatWorkspace({ sessionId }: Props) {
     setWorkspaceCollapsed,
     setWorkspaceWidthRatio,
     getControlImage,
+    setControlImage,
     getAnnotatedImage,
+    setAnnotatedImage,
     getReferenceImages,
     getPromptDraft,
     promptDraft,
@@ -84,6 +86,7 @@ export function ChatWorkspace({ sessionId }: Props) {
     updateControlImage,
     updateAnnotatedImage,
     updateReferenceImage,
+    setRagImage,
   } = useWorkspaceStore();
 
   const controlImage = getControlImage(sessionId);
@@ -133,13 +136,33 @@ export function ChatWorkspace({ sessionId }: Props) {
         setMessages(sessionDetail.messages ?? []);
         setSessions(sessionItems);
         if (sessionDetail.workspace_state) {
+          const ws = sessionDetail.workspace_state;
+          // Support both new layered format {prompt_draft, ...} and legacy flat PromptDraft
+          const promptDraft = ws.prompt_draft ?? (ws as unknown as import("@/lib/types").PromptDraft);
           setSessionPromptDraft(sessionId, {
-            keywords: sessionDetail.workspace_state.keywords ?? {},
-            llm_description: sessionDetail.workspace_state.llm_description ?? "",
-            custom_description: sessionDetail.workspace_state.custom_description ?? "",
-            negative_prompt: sessionDetail.workspace_state.negative_prompt ?? "",
-            prompt_template: sessionDetail.workspace_state.prompt_template ?? null,
+            keywords: promptDraft?.keywords ?? {},
+            llm_description: promptDraft?.llm_description ?? "",
+            custom_description: promptDraft?.custom_description ?? "",
+            negative_prompt: promptDraft?.negative_prompt ?? "",
+            prompt_template: promptDraft?.prompt_template ?? null,
           });
+          if (ws.rag_image) {
+            setRagImage(sessionId, ws.rag_image);
+          }
+          if (ws.control_image) {
+            setControlImage(sessionId, {
+              fileId: ws.control_image.file_id,
+              url: ws.control_image.url,
+              note: ws.control_image.note ?? "",
+            });
+          }
+          if (ws.annotated_image) {
+            setAnnotatedImage(sessionId, {
+              fileId: ws.annotated_image.file_id,
+              url: ws.annotated_image.url,
+              note: ws.annotated_image.note ?? "",
+            });
+          }
         } else {
           setSessionPromptDraft(sessionId, getPromptDraft(sessionId));
         }

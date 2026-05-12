@@ -35,7 +35,7 @@ from models.database import get_session, async_session as _db_session_factory
 from models.schemas import GenerationTask
 from services.message_service import add_message, get_messages
 from services.session_service import get_session as get_db_session
-from services.session_service import create_generation_task, update_workspace_state, upsert_reference_images
+from services.session_service import create_generation_task, update_workspace_state, update_prompt_draft, update_rag_image_state, upsert_reference_images
 from services.session_title_service import maybe_generate_session_title
 
 router = APIRouter(prefix="/api/chat")
@@ -176,7 +176,7 @@ async def submit_message(
         ):
             ws_key = f"workspace:{session_id}:{stream_id}"
             await r.set(ws_key, json.dumps(body.workspace.model_dump()), ex=_RUN_TTL)
-            await update_workspace_state(db, session_id, body.workspace.model_dump())
+            await update_prompt_draft(db, session_id, body.workspace.model_dump())
 
         if body.reference_images:
             await upsert_reference_images(
@@ -387,13 +387,16 @@ async def _generate_sse(
                         assistant_text_parts.append(content)
 
                 if event_type == "prompt_update" and isinstance(data, dict):
-                    await update_workspace_state(db, session_id, {
+                    await update_prompt_draft(db, session_id, {
                         "keywords": data.get("keywords", {}),
                         "llm_description": data.get("llm_description", ""),
                         "custom_description": data.get("custom_description", ""),
                         "negative_prompt": data.get("negative_prompt", ""),
                         "prompt_template": data.get("prompt_template"),
                     })
+
+                if event_type == "rag_image_update" and isinstance(data, dict):
+                    await update_rag_image_state(db, session_id, data or None)
 
                 if event_type == "reference_image_update" and isinstance(data.get("image_url"), str):
                     analysis = dict(data)

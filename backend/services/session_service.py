@@ -35,6 +35,22 @@ async def delete_session(db: AsyncSession, session_id: uuid.UUID) -> bool:
     if session is None:
         return False
 
+    # Clean up rag_image upload copy before removing the session row
+    ws = getattr(session, "workspace_state", None) or {}
+    rag_image = ws.get("rag_image") if isinstance(ws, dict) else None
+    if isinstance(rag_image, dict):
+        rag_url = rag_image.get("image_url") or ""
+        if rag_url.startswith("/static/uploads/"):
+            from pathlib import Path
+            from config import settings
+            filename = rag_url.removeprefix("/static/uploads/")
+            p = Path(settings.UPLOAD_DIR) / filename
+            try:
+                if p.exists():
+                    p.unlink()
+            except OSError:
+                pass
+
     await db.execute(delete(Message).where(Message.session_id == session_id))
     await db.execute(delete(ReferenceImage).where(ReferenceImage.session_id == session_id))
     await db.execute(delete(GenerationTask).where(GenerationTask.session_id == session_id))
@@ -51,6 +67,46 @@ async def update_workspace_state(
         return None
 
     session.workspace_state = workspace_state
+    await db.commit()
+    await db.refresh(session)
+    return session
+
+
+async def update_prompt_draft(
+    db: AsyncSession, session_id: uuid.UUID, prompt_draft: dict
+) -> Session | None:
+    """Merge prompt_draft into the layered workspace_state, preserving other sub-keys."""
+    session = await get_session(db, session_id)
+    if session is None:
+        return None
+
+    existing = dict(session.workspace_state) if isinstance(session.workspace_state, dict) else {}
+    # Handle legacy flat format (direct PromptDraft keys at root)
+    if "keywords" in existing and "prompt_draft" not in existing:
+        existing = {"prompt_draft": existing}
+    existing["prompt_draft"] = prompt_draft
+    session.workspace_state = existing
+    await db.commit()
+    await db.refresh(session)
+    return session
+
+
+async def update_rag_image_state(
+    db: AsyncSession, session_id: uuid.UUID, rag_image: dict | None
+) -> Session | None:
+    """Persist the rag_image sub-key in workspace_state."""
+    session = await get_session(db, session_id)
+    if session is None:
+        return None
+
+    existing = dict(session.workspace_state) if isinstance(session.workspace_state, dict) else {}
+    if "keywords" in existing and "prompt_draft" not in existing:
+        existing = {"prompt_draft": existing}
+    if rag_image is None:
+        existing.pop("rag_image", None)
+    else:
+        existing["rag_image"] = rag_image
+    session.workspace_state = existing
     await db.commit()
     await db.refresh(session)
     return session

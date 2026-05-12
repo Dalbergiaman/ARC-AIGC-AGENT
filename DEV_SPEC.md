@@ -1553,7 +1553,7 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
   - `agent/tools/image_generator.py` 拼装：`input_image_urls = [control, annotated, rag]`（按存在性过滤），prompt 头部按实际位置追加"图N 为氛围参考：{ambience_note}"，与现有"图1结构底图 / 图2批注图"逻辑统一
   - `evaluate_image_node` 不传 `rag_image` 给评估
   - 验证：手动构造 control + rag 请求，确认 provider 请求体里图片顺序正确、prompt 含"图N 为氛围参考"
-- [ ] **Commit 5 — Refactor workspace_state and persist rag_image**
+- [x] **Commit 5 — Refactor workspace_state and persist rag_image**
   - `sessions.workspace_state` JSON 重构为分层结构：`{prompt_draft, rag_image, control_image, annotated_image}`
   - `backend/services/session_service.py` 写入 / 恢复链路兼容新结构；`schema_guard.py` 处理旧记录（旧记录被读为整份 PromptDraft，自动迁移到 `prompt_draft` 子键下）
   - `GET /api/sessions/{id}` 返回新分层结构；前端 `workspaceStore` 同步消费

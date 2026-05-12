@@ -53,11 +53,26 @@ export type DashboardProviders = {
   embedding: LLMProviderOption[];
 };
 
+export type RagImageState = {
+  file_id: string;
+  image_url: string;
+  source_image_id: string;
+  ambience_note: string;
+  sent: boolean;
+};
+
+export type WorkspaceState = {
+  prompt_draft?: PromptDraft | null;
+  rag_image?: RagImageState | null;
+  control_image?: { file_id: string; url: string; note?: string } | null;
+  annotated_image?: { file_id: string; url: string; note?: string } | null;
+};
+
 export type SessionResponse = {
   id: string;
   title: string;
   design_state: Record<string, unknown> | null;
-  workspace_state?: PromptDraft | null;
+  workspace_state?: WorkspaceState | null;
   created_at?: string;
 };
 
@@ -120,6 +135,16 @@ export type SSEEventPayloadMap = {
     prompt_template: StyleTemplate | null;
     source: "agent_node" | "enhance_prompt" | "refine_prompt";
   };
+  rag_candidates: {
+    candidates: Array<{
+      image_id: string;
+      image_url: string;
+      caption?: string;
+      score?: number;
+    }>;
+    timeout: number;
+  };
+  rag_image_update: RagImageState;
   error: { code: string; message: string };
   done: { finish_reason: "stop" | "max_retries" | "interrupted" };
 };

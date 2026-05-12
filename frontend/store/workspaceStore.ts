@@ -5,6 +5,7 @@ import type {
   AnnotatedImageDraft,
   ControlImageDraft,
   PromptDraft,
+  RagImageState,
   ReferenceImageDraft,
   StyleTemplate,
   WorkspaceTab,
@@ -35,6 +36,7 @@ type WorkspaceStore = {
   // Session-scoped workspace state persisted to localStorage
   controlImageBySession: Record<string, ControlImageDraft | null>;
   annotatedImageBySession: Record<string, AnnotatedImageDraft | null>;
+  ragImageBySession: Record<string, RagImageState | null>;
   referenceImagesBySession: Record<string, ReferenceImageDraft[]>;
   promptDraftBySession: Record<string, PromptDraft>;
   promptTemplateBySession: Record<string, StyleTemplate | null>;
@@ -71,6 +73,10 @@ type WorkspaceStore = {
   removeReferenceImage: (sessionId: string, fileId: string) => void;
   clearSessionReferenceImages: (sessionId: string) => void;
   setSessionReferenceImages: (sessionId: string, images: ReferenceImageDraft[]) => void;
+  // RAG image actions
+  getRagImage: (sessionId: string) => RagImageState | null;
+  setRagImage: (sessionId: string, img: RagImageState | null) => void;
+  clearRagImage: (sessionId: string) => void;
 };
 
 function clampWorkspaceWidthRatio(ratio: number): number {
@@ -87,6 +93,7 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
       promptDraft: createEmptyPromptDraft(),
       controlImageBySession: {},
       annotatedImageBySession: {},
+      ragImageBySession: {},
       referenceImagesBySession: {},
       promptDraftBySession: {},
       promptTemplateBySession: {},
@@ -299,6 +306,17 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             [sessionId]: images,
           },
         })),
+
+      getRagImage: (sessionId) => get().ragImageBySession[sessionId] ?? null,
+      setRagImage: (sessionId, img) =>
+        set((state) => ({
+          ragImageBySession: { ...state.ragImageBySession, [sessionId]: img },
+        })),
+      clearRagImage: (sessionId) =>
+        set((state) => {
+          const { [sessionId]: _, ...rest } = state.ragImageBySession;
+          return { ragImageBySession: rest };
+        }),
     }),
     {
       name: "workspace-store",
@@ -307,6 +325,7 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
       partialize: (state) => ({
         controlImageBySession: state.controlImageBySession,
         annotatedImageBySession: state.annotatedImageBySession,
+        ragImageBySession: state.ragImageBySession,
         referenceImagesBySession: state.referenceImagesBySession,
         promptDraftBySession: state.promptDraftBySession,
         promptTemplateBySession: state.promptTemplateBySession,

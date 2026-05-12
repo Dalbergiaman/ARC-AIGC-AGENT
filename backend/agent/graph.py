@@ -471,6 +471,8 @@ async def rag_gate_node(state: AgentState) -> dict:
         rag_image = await _materialise_rag_image(client, picked_image_id)
         if rag_image is not None:
             out["rag_image"] = rag_image
+            if emitter is not None:
+                await emitter.emit("rag_image_update", rag_image)
             update_current_span(output={
                 "picked_image_id": picked_image_id,
                 "rag_image_file_id": rag_image.get("file_id"),

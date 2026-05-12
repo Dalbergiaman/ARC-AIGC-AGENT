@@ -76,6 +76,11 @@ _TOOL_SUMMARIES: dict[str, str] = {
     "generate_image": "正在生成图像...",
 }
 
+# Extra emitter event types (not LangGraph tool events):
+#   rag_candidates    — rag_gate emits candidate list for frontend popup
+#   rag_image_update  — rag_gate emits assembled rag_image after user pick
+#   reference_image_update — agent_node emits VLM analysis result for a ref image
+
 _TOOL_DONE_SUMMARIES: dict[str, str] = {
     "analyze_reference_image": "参考图分析完成",
     "enhance_prompt": "提示词构建完成",
