@@ -44,3 +44,5 @@ def ensure_legacy_schema_compatibility(sync_conn) -> None:
             sync_conn.execute(text("ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS score DOUBLE PRECISION"))
         if "raw_response" not in generation_columns:
             sync_conn.execute(text("ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS raw_response JSON"))
+        if "stored_in_library" not in generation_columns:
+            sync_conn.execute(text("ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS stored_in_library BOOLEAN NOT NULL DEFAULT FALSE"))

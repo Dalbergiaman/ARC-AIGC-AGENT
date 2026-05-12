@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import FLOAT, JSON, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import FLOAT, JSON, Boolean, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -54,4 +54,5 @@ class GenerationTask(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending")
     score: Mapped[float | None] = mapped_column(FLOAT, default=None)
     raw_response: Mapped[dict | None] = mapped_column(JSON, default=None)
+    stored_in_library: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

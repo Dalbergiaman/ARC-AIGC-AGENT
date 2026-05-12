@@ -199,6 +199,7 @@ export function ChatWorkspace({ sessionId }: Props) {
               prompt: item.prompt,
               negativePrompt: item.negative_prompt ?? null,
               rawResponse: item.raw_response ?? null,
+              storedInLibrary: item.stored_in_library ?? false,
               created_at: item.created_at,
             }));
 

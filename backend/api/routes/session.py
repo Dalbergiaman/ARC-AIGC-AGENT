@@ -59,6 +59,7 @@ class GenerationTaskResponse(BaseModel):
     status: str
     score: float | None = None
     raw_response: dict | None = None
+    stored_in_library: bool = False
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}

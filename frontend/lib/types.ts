@@ -106,6 +106,7 @@ export type GenerationPreview = {
   rawResponse?: Record<string, unknown> | null;
   assistantMessageId?: string;
   created_at?: string;
+  storedInLibrary?: boolean;
 };
 
 export type StyleTemplate = {
@@ -225,6 +226,7 @@ export type SessionGenerationTask = {
   status: string;
   score?: number | null;
   raw_response?: Record<string, unknown> | null;
+  stored_in_library?: boolean;
   created_at?: string;
 };
 

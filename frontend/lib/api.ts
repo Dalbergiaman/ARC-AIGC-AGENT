@@ -107,6 +107,7 @@ export function storeImageToLibrary(payload: {
   image_url: string;
   prompt: string;
   session_id?: string;
+  task_id?: string;
   negative_prompt?: string;
   provider?: string;
   design_state?: Record<string, unknown>;

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
+from models.database import get_db
 from services import library_service
+from services.session_service import mark_stored_in_library
 from services.storage_service import download_and_save_library_image
 
 router = APIRouter(prefix="/api/library", tags=["library"])
@@ -24,6 +28,7 @@ class StoreRequest(BaseModel):
     image_url: str
     prompt: str
     session_id: str | None = None
+    task_id: str | None = None  # Celery task_id to mark stored_in_library in DB
     negative_prompt: str | None = None
     design_state: dict[str, Any] | None = None
     provider: str | None = None
@@ -45,12 +50,16 @@ class PickRequest(BaseModel):
 
 
 @router.post("/store")
-async def store_image(request: Request, body: StoreRequest) -> dict[str, Any]:
+async def store_image(
+    request: Request,
+    body: StoreRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
     client = getattr(request.app.state, "mcp_client", None)
     if client is None:
         raise HTTPException(status_code=503, detail="image-rag MCP client is not ready")
     try:
-        return await library_service.store_image(
+        result = await library_service.store_image(
             client,
             image_url=body.image_url,
             prompt=body.prompt,
@@ -61,6 +70,14 @@ async def store_image(request: Request, body: StoreRequest) -> dict[str, Any]:
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"MCP store failed: {exc}") from exc
+
+    if body.session_id and body.task_id:
+        try:
+            await mark_stored_in_library(db, uuid.UUID(body.session_id), body.task_id)
+        except Exception:
+            pass  # DB update is best-effort; MCP store already succeeded
+
+    return result
 
 
 @router.post("/select", response_model=SelectResponse)

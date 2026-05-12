@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import Link from "next/link";
 import {
+  Activity,
   BookOpen,
   ChevronLeft,
   ChevronRight,
@@ -76,13 +77,24 @@ export function AppSidebar({
             <Settings2 className="size-4 shrink-0" />
             {!collapsed ? <span>Dashboard</span> : null}
           </Link>
-          <button
-            type="button"
-            className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm text-muted-foreground hover:bg-black/[0.04] hover:text-foreground"
+          <a
+            href="http://localhost:8080"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 rounded-md px-3 py-2 text-sm hover:bg-black/[0.04]"
           >
             <BookOpen className="size-4 shrink-0" />
             {!collapsed ? <span>知识库</span> : null}
-          </button>
+          </a>
+          <a
+            href="http://localhost:3000"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 rounded-md px-3 py-2 text-sm hover:bg-black/[0.04]"
+          >
+            <Activity className="size-4 shrink-0" />
+            {!collapsed ? <span>推理追踪</span> : null}
+          </a>
           <Link
             href="/chat/new"
             className="flex items-center gap-3 rounded-md px-3 py-2 text-sm hover:bg-black/[0.04]"

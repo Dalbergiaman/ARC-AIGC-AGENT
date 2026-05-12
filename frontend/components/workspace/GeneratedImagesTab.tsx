@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Download, ImageIcon, Loader2, Pencil, Save, X } from "lucide-react";
+import { BookMarked, Download, ImageIcon, Loader2, Pencil, Save, X } from "lucide-react";
 
 import { ImageAnnotationCanvas } from "@/components/workspace/ImageAnnotationCanvas";
 import { deleteUpload, getApiBaseUrl, storeImageToLibrary } from "@/lib/api";
 import type { GenerationPreview } from "@/lib/types";
+import { useChatStore } from "@/store/chatStore";
 import { useWorkspaceStore } from "@/store/workspaceStore";
 
 type Props = {
@@ -30,6 +31,7 @@ export function GeneratedImagesTab({ sessionId, generationPreviews }: Props) {
   const [storingTaskId, setStoringTaskId] = useState<string | null>(null);
   const [storeError, setStoreError] = useState<string | null>(null);
   const bestTaskId = getBestTaskId(generationPreviews);
+  const { upsertGenerationPreview } = useChatStore();
   const {
     getAnnotatedImage,
     setAnnotatedImage,
@@ -62,7 +64,7 @@ export function GeneratedImagesTab({ sessionId, generationPreviews }: Props) {
   }
 
   async function handleStore(item: GenerationPreview) {
-    if (!item.imageUrl || storingTaskId) return;
+    if (!item.imageUrl || storingTaskId || item.storedInLibrary) return;
     setStoreError(null);
     setStoringTaskId(item.taskId);
     try {
@@ -70,9 +72,11 @@ export function GeneratedImagesTab({ sessionId, generationPreviews }: Props) {
         image_url: resolveImageUrl(item.imageUrl),
         prompt: item.prompt ?? "",
         session_id: sessionId,
+        task_id: item.taskId,
         negative_prompt: item.negativePrompt ?? undefined,
         provider: item.provider ?? undefined,
       });
+      upsertGenerationPreview({ ...item, storedInLibrary: true });
     } catch (error) {
       setStoreError(error instanceof Error ? error.message : "存入图库失败");
     } finally {
@@ -185,6 +189,12 @@ export function GeneratedImagesTab({ sessionId, generationPreviews }: Props) {
                       <span className="rounded bg-black/[0.04] px-1.5 py-0.5 text-[11px] text-muted-foreground">
                         {status}
                       </span>
+                      {item.storedInLibrary && (
+                        <span className="flex items-center gap-0.5 rounded bg-blue-50 px-1.5 py-0.5 text-[11px] font-medium text-blue-600">
+                          <BookMarked className="size-3" />
+                          已入库
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -211,10 +221,10 @@ export function GeneratedImagesTab({ sessionId, generationPreviews }: Props) {
                     </button>
                     <button
                       type="button"
-                      disabled={!imageUrl || storingTaskId === item.taskId}
+                      disabled={!imageUrl || storingTaskId === item.taskId || item.storedInLibrary}
                       onClick={() => handleStore(item)}
                       className="inline-flex items-center justify-center rounded-md border border-black/8 py-1.5 text-muted-foreground hover:bg-black/[0.04] disabled:opacity-40"
-                      title="存入图库"
+                      title={item.storedInLibrary ? "已存入图库" : "存入图库"}
                     >
                       {storingTaskId === item.taskId ? (
                         <Loader2 className="size-4 animate-spin" />

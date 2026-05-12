@@ -211,6 +211,22 @@ async def list_generation_tasks(
     return list(result.scalars().all())
 
 
+async def mark_stored_in_library(
+    db: AsyncSession, session_id: uuid.UUID, task_id: str
+) -> bool:
+    result = await db.execute(
+        select(GenerationTask)
+        .where(GenerationTask.session_id == session_id)
+        .where(GenerationTask.task_id == task_id)
+    )
+    task = result.scalar_one_or_none()
+    if task is None:
+        return False
+    task.stored_in_library = True
+    await db.commit()
+    return True
+
+
 async def update_session_title(
     db: AsyncSession, session_id: uuid.UUID, title: str
 ) -> Session | None:
