@@ -7,6 +7,7 @@ import re
 from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -15,8 +16,6 @@ from agent.prompts import agent_system
 from agent.state import AgentState, EvaluationResult, PromptDraft, default_agent_state
 from agent.state_utils import (
     reset_generation_run,
-    signature_changed,
-    make_search_signature,
     update_completeness,
 )
 from agent.tools.image_analysis import analyze_reference_image
@@ -24,11 +23,28 @@ from agent.tools.image_evaluator import evaluate_generated_image
 from agent.tools.image_generator import NullEmitter, generate_image
 from core.llm.streaming import get_current_emitter
 from agent.tools.prompt_builder import EnhancedPrompt, enhance_prompt, refine_prompt
-from agent.tools.search_library import search_similar_cases
 from core.llm.client import LLMClient
 from core.observability import message_preview, observe, update_current_span
+from services import library_service
 
 _llm = LLMClient()
+
+# ---------------------------------------------------------------------------
+# MCP client accessor — injected from main.py lifespan
+# ---------------------------------------------------------------------------
+
+_MCP_CLIENT: MultiServerMCPClient | None = None
+
+
+def set_mcp_client(client: MultiServerMCPClient | None) -> None:
+    """Register the lifespan-owned MCP client so graph nodes can reach it."""
+    global _MCP_CLIENT
+    _MCP_CLIENT = client
+
+
+def get_mcp_client() -> MultiServerMCPClient | None:
+    return _MCP_CLIENT
+
 
 # Regex to find image URLs in message content
 _IMAGE_URL_RE = re.compile(r'https?://\S+\.(?:jpg|jpeg|png|webp)', re.IGNORECASE)
@@ -70,7 +86,6 @@ def _prompt_keywords(design_state: dict) -> dict[str, str]:
 def _compose_llm_description(
     design_state: dict,
     reference_images: list[dict],
-    similar_cases: list[dict],
     user_prompt_hint: str = "",
     llm_reply_hint: str = "",
 ) -> str:
@@ -94,8 +109,6 @@ def _compose_llm_description(
         parts.append("把建筑与周边环境的关系交代出来，避免主体悬浮。")
     if reference_images:
         parts.append("参考图中的构图、体块关系和视觉重心需要被吸收进描述里。")
-    if similar_cases:
-        parts.append("描述需要参考历史案例的成熟表达，但保持当前项目的独立性。")
     if special_requirements:
         parts.append(f"特别要求是：{special_requirements}。")
     if user_prompt_hint:
@@ -110,7 +123,6 @@ def _compose_llm_description(
 def _build_prompt_draft(
     design_state: dict,
     reference_images: list[dict],
-    similar_cases: list[dict],
     control_image: dict | None = None,
     custom_description: str = "",
     user_prompt_hint: str = "",
@@ -123,7 +135,6 @@ def _build_prompt_draft(
         "llm_description": _compose_llm_description(
             design_state=design_state,
             reference_images=reference_images,
-            similar_cases=similar_cases,
             user_prompt_hint=user_prompt_hint,
             llm_reply_hint=" ".join(filter(None, [
                 "保持图生图底图的建筑体量、空间尺度、透视关系和主要构图。" if control_image else "",
@@ -192,7 +203,6 @@ async def agent_node(state: AgentState) -> dict:
     design_state = dict(state.get("design_state") or {})
     reference_images = list(state.get("reference_images") or [])
     control_image = state.get("control_image")
-    similar_cases = list(state.get("similar_cases") or [])
     messages = list(state.get("messages") or [])
     explicit_generation_intent = has_explicit_generation_intent(messages)
     workspace = dict(state.get("workspace") or {})
@@ -205,7 +215,6 @@ async def agent_node(state: AgentState) -> dict:
             "latest_message": message_preview(messages[-1].content) if messages else "",
             "design_state": design_state,
             "reference_image_count": len(reference_images),
-            "similar_case_count": len(similar_cases),
         },
         metadata={
             "phase": state.get("phase"),
@@ -261,7 +270,6 @@ async def agent_node(state: AgentState) -> dict:
         SystemMessage(content=agent_system(
             design_state=design_state,
             reference_analysis=reference_images,
-            similar_cases=similar_cases,
             prompt_template=prompt_template,
         )),
         *messages,
@@ -326,7 +334,6 @@ async def agent_node(state: AgentState) -> dict:
     prompt_draft = _build_prompt_draft(
         design_state=design_state,
         reference_images=reference_images,
-        similar_cases=similar_cases,
         control_image=control_image if isinstance(control_image, dict) else None,
         custom_description=custom_description,
         user_prompt_hint=prompt_hint,
@@ -375,61 +382,74 @@ async def agent_node(state: AgentState) -> dict:
 
 @observe(name="node:rag_gate")
 async def rag_gate_node(state: AgentState) -> dict:
-    """Rule-based gate: calls search_similar_cases when conditions are met.
+    """Call MCP search_by_text and stash candidates in state.
 
-    Triggers RAG if:
-    - similar_cases is empty and building_type or style is set, OR
-    - core design fields changed since last search
+    This commit only wires the real retrieval — SSE push and user-pick
+    blocking land in commit 3. Downstream nodes ignore
+    ``pending_rag_candidates`` until commit 4 adds rag_image assembly.
     """
     design_state = dict(state.get("design_state") or {})
-    similar_cases = list(state.get("similar_cases") or [])
-    last_sig = state.get("last_search_signature")
-
     building_type = design_state.get("building_type", "")
     style = design_state.get("style", "")
 
-    should_search = (
-        (building_type or style)
-        and (not similar_cases or signature_changed(design_state, last_sig))
-    )
-
-    if not should_search:
+    if not (building_type or style):
         update_current_span(
-            input={"design_state": design_state, "last_search_signature": last_sig},
-            output={"searched": False, "reason": "signature unchanged or missing core fields"},
+            input={"design_state": design_state},
+            output={"searched": False, "reason": "building_type and style both empty"},
         )
         return {}
 
-    query = " ".join(filter(None, [building_type, style,
-                                    design_state.get("facade_material", "")]))
-    results = await search_similar_cases.ainvoke({
-        "query": query,
-        "building_type": building_type,
-        "style": style,
-    })
+    client = get_mcp_client()
+    if client is None:
+        update_current_span(
+            input={"design_state": design_state},
+            output={"searched": False, "reason": "mcp_client not registered"},
+            level="WARNING",
+            status_message="MCP client missing; skipping RAG search",
+        )
+        return {}
 
+    query = " ".join(filter(None, [
+        building_type,
+        style,
+        design_state.get("facade_material", ""),
+    ]))
+    filters = {k: v for k, v in {"building_type": building_type, "style": style}.items() if v}
+
+    try:
+        results = await library_service.search_by_text(
+            client,
+            query=query,
+            top_k=5,
+            filters=filters or None,
+        )
+    except Exception as exc:
+        update_current_span(
+            input={"query": query, "filters": filters},
+            output={"searched": False, "error": str(exc)},
+            level="WARNING",
+            status_message=f"RAG search failed: {exc}",
+        )
+        return {}
+
+    candidates = list(results or [])
     update_current_span(
-        input={"query": query, "building_type": building_type, "style": style},
-        output={"searched": True, "result_count": len(results)},
+        input={"query": query, "filters": filters},
+        output={"searched": True, "candidate_count": len(candidates)},
     )
-    return {
-        "similar_cases": results,
-        "last_search_signature": make_search_signature(design_state),
-    }
+    return {"pending_rag_candidates": candidates}
 
 
 @observe(name="node:enhance_prompt")
 async def enhance_prompt_node(state: AgentState) -> dict:
-    """Build the image generation prompt from DesignState + similar cases."""
+    """Build the image generation prompt from DesignState and reference images."""
     design_state = dict(state.get("design_state") or {})
     reference_images = list(state.get("reference_images") or [])
     control_image = state.get("control_image")
-    similar_cases = list(state.get("similar_cases") or [])
 
     enhanced = await enhance_prompt(
         design_state=design_state,
         reference_analysis=reference_images,
-        similar_cases=similar_cases,
         llm_description=str((state.get("workspace") or {}).get("llm_description", "") or ""),
         custom_description=str((state.get("workspace") or {}).get("custom_description", "") or ""),
         prompt_template=(state.get("workspace") or {}).get("prompt_template"),
@@ -437,7 +457,6 @@ async def enhance_prompt_node(state: AgentState) -> dict:
     workspace = _build_prompt_draft(
         design_state=design_state,
         reference_images=reference_images,
-        similar_cases=similar_cases,
         control_image=control_image if isinstance(control_image, dict) else None,
         custom_description=str((state.get("workspace") or {}).get("custom_description", "") or ""),
         user_prompt_hint=str((state.get("workspace") or {}).get("llm_description", "") or ""),
@@ -458,7 +477,6 @@ async def enhance_prompt_node(state: AgentState) -> dict:
         input={
             "design_state": design_state,
             "reference_image_count": len(reference_images),
-            "similar_case_count": len(similar_cases),
         },
         output=enhanced.model_dump(),
     )
@@ -623,7 +641,6 @@ async def refine_prompt_node(state: AgentState) -> dict:
     workspace = _build_prompt_draft(
         design_state=dict(state.get("design_state") or {}),
         reference_images=list(state.get("reference_images") or []),
-        similar_cases=list(state.get("similar_cases") or []),
         control_image=state.get("control_image") if isinstance(state.get("control_image"), dict) else None,
         custom_description=str((state.get("workspace") or {}).get("custom_description", "") or ""),
         user_prompt_hint=str((state.get("workspace") or {}).get("llm_description", "") or ""),

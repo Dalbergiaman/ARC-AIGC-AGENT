@@ -36,22 +36,6 @@ def update_completeness(design_state: dict) -> dict:
     return updated
 
 
-def make_search_signature(design_state: dict) -> dict:
-    return {
-        "building_type": design_state.get("building_type", ""),
-        "style": design_state.get("style", ""),
-        "facade_material": design_state.get("facade_material", ""),
-        "surroundings": design_state.get("surroundings", ""),
-    }
-
-
-def signature_changed(current: dict, last: dict | None) -> bool:
-    """Return True if any core design field changed since the last RAG search."""
-    if last is None:
-        return True
-    return make_search_signature(current) != last
-
-
 def reset_generation_run(state: AgentState) -> dict:
     """Return state updates that reset per-task runtime fields for a new generation intent."""
     return {

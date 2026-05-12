@@ -1533,7 +1533,7 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
   - `backend/services/library_service.py`：封装 MCP 调用，提供 `store_image / search_by_text / search_by_image / get_image_by_id`
   - `backend/api/routes/library.py`：`POST /api/library/store`（前端"存入图库"按钮）、`POST /api/library/select`（下载到 backend uploads 返 `{file_id, url}`）
   - 不接 Agent，独立 curl 验证
-- [ ] **Commit 2 — Wire MCP search into Agent and drop similar_cases**
+- [x] **Commit 2 — Wire MCP search into Agent and drop similar_cases**
   - 删除 `AgentState.similar_cases` / `last_search_signature`、`state_utils.py::make_search_signature` / `signature_changed`、`agent/tools/search_library.py::search_similar_cases`、`agent_system` / `enhance_prompt_system` / `refine_prompt_system` 中所有 `similar_cases` 引用、`enhance_prompt` / `_build_prompt_draft` / `_compose_llm_description` 函数签名中的 `similar_cases` 参数
   - 新增 `AgentState.rag_image: RagImage | None`、`AgentState.pending_rag_candidates`
   - 新增 `RagImage` TypedDict（file_id / image_url / source_image_id / ambience_note / sent）

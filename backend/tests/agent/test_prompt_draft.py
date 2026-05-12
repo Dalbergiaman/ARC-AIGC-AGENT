@@ -8,7 +8,6 @@ def test_prompt_draft_contains_all_fields() -> None:
     draft = _build_prompt_draft(
         design_state={"building_type": "villa", "style": "modern"},
         reference_images=[],
-        similar_cases=[],
         custom_description="用户自定义描述",
         user_prompt_hint="模型补全描述",
         negative_prompt="blurry",

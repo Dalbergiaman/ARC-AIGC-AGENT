@@ -39,12 +39,11 @@ def _parse_prompt_response(raw: str) -> EnhancedPrompt:
 async def enhance_prompt(
     design_state: DesignState,
     reference_analysis: list[ReferenceImageAnalysis] | None = None,
-    similar_cases: list[dict] | None = None,
     llm_description: str = "",
     custom_description: str = "",
     prompt_template: dict | None = None,
 ) -> EnhancedPrompt:
-    """Build image generation prompt from DesignState, reference images, and similar cases.
+    """Build image generation prompt from DesignState and reference images.
 
     Called by enhance_prompt_node in the deterministic generation sub-flow.
     """
@@ -52,7 +51,6 @@ async def enhance_prompt(
         SystemMessage(content=enhance_prompt_system(
             design_state=design_state,
             reference_analysis=reference_analysis,
-            similar_cases=similar_cases,
             llm_description=llm_description,
             custom_description=custom_description,
             prompt_template=prompt_template,
@@ -65,7 +63,6 @@ async def enhance_prompt(
         input={
             "design_state": design_state,
             "reference_image_count": len(reference_analysis or []),
-            "similar_case_count": len(similar_cases or []),
             "has_prompt_template": bool(prompt_template),
         },
         output=message_preview(raw),

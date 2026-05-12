@@ -70,7 +70,6 @@ class QueueEmitter:
 
 _TOOL_SUMMARIES: dict[str, str] = {
     "analyze_reference_image": "正在分析参考图...",
-    "search_similar_cases": "正在检索相似案例...",
     "enhance_prompt": "正在构建生成提示词...",
     "refine_prompt": "正在优化提示词...",
     "evaluate_generated_image": "正在评估生成结果...",
@@ -79,7 +78,6 @@ _TOOL_SUMMARIES: dict[str, str] = {
 
 _TOOL_DONE_SUMMARIES: dict[str, str] = {
     "analyze_reference_image": "参考图分析完成",
-    "search_similar_cases": "相似案例检索完成",
     "enhance_prompt": "提示词构建完成",
     "refine_prompt": "提示词优化完成",
     "evaluate_generated_image": "图像评估完成",
@@ -95,9 +93,6 @@ def summarize_tool_output(tool_name: str, output: object) -> str:
         score = output.get("score")
         if score is not None:
             return f"{base}（评分 {score:.2f}）"
-
-    if tool_name == "search_similar_cases" and isinstance(output, list):
-        return f"{base}（找到 {len(output)} 个案例）"
 
     return base
 
@@ -368,10 +363,6 @@ if __name__ == "__main__":
         print(f"  eval summary: {s}")
         assert "0.87" in s
 
-        s2 = summarize_tool_output("search_similar_cases", [1, 2, 3])
-        print(f"  search summary: {s2}")
-        assert "3" in s2
-
         s3 = summarize_tool_output("unknown_tool", None)
         print(f"  unknown summary: {s3}")
         print("  summarize OK\n")
@@ -402,7 +393,7 @@ if __name__ == "__main__":
 
         e3 = {
             "event": "on_tool_end",
-            "name": "search_similar_cases",
+            "name": "analyze_reference_image",
             "data": {"output": [{"id": "1"}, {"id": "2"}]},
         }
         result3 = _map_langgraph_event(e3, 2)

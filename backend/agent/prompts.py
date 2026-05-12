@@ -6,7 +6,6 @@ from agent.tools.prompt_templates import list_styles
 def agent_system(
     design_state: DesignState,
     reference_analysis: list[ReferenceImageAnalysis] | None = None,
-    similar_cases: list[dict] | None = None,
     prompt_template: dict | None = None,
 ) -> str:
     ds = design_state
@@ -23,13 +22,6 @@ def agent_system(
                 f"视角={r.get('viewpoint', '未知')} 描述={r.get('description', '')}"
             )
         ref_section = "【参考图分析】\n" + "\n".join(lines)
-
-    cases_section = ""
-    if similar_cases:
-        lines = []
-        for c in similar_cases[:3]:
-            lines.append(f"  - {c.get('caption', '')} (prompt: {c.get('prompt', '')[:80]}...)")
-        cases_section = "【相似案例（RAG）】\n" + "\n".join(lines)
 
     template_section = ""
     if prompt_template:
@@ -65,7 +57,6 @@ def agent_system(
 - 仍需补充: {', '.join(missing) if missing else '无'}
 
 {ref_section}
-{cases_section}
 {template_section}
 
 ## 你的职责
@@ -149,7 +140,6 @@ def analyze_image_system() -> str:
 def enhance_prompt_system(
     design_state: DesignState,
     reference_analysis: list[ReferenceImageAnalysis] | None = None,
-    similar_cases: list[dict] | None = None,
     llm_description: str = "",
     custom_description: str = "",
     prompt_template: dict | None = None,
@@ -161,14 +151,6 @@ def enhance_prompt_system(
         descs = [r.get("description", "") for r in reference_analysis if r.get("description")]
         if descs:
             ref_section = "【参考图特征】\n" + "\n".join(f"  - {d}" for d in descs)
-
-    cases_section = ""
-    if similar_cases:
-        prompts = [c.get("prompt", "") for c in similar_cases[:2] if c.get("prompt")]
-        if prompts:
-            cases_section = "【历史优质提示词参考】\n" + "\n".join(
-                f"  - {p[:120]}" for p in prompts
-            )
 
     description_section = ""
     if llm_description or custom_description:
@@ -202,7 +184,6 @@ def enhance_prompt_system(
 - 特殊需求: {ds.get('special_requirements', '')}
 
 {ref_section}
-{cases_section}
 {description_section}
 {template_section}
 
@@ -215,12 +196,12 @@ def enhance_prompt_system(
 }}
 ```
 
-要求：
+要求:
 - prompt 必须是英文，从建筑类型和风格开始，依次加入材质、光线、视角、环境
 - 如果用户提供了图生图底图，请明确要求保留底图的建筑体量、透视关系、空间尺度和主要构图，只改变用户要求调整的风格、材质、光线或氛围
 - 将"模型整理描述"和"用户自定义描述"融合进 prompt，不要只输出关键词
 - 仅当存在"用户选择的风格模板"时，才将其作为风格上下文融入 prompt；用户未选模板时，按设计参数中的风格字段自然描述即可，不要套用任何模板关键词库
-- 融入参考图特征和历史案例的有效表达方式
+- 融入参考图特征的有效表达方式
 - negative_prompt 包含通用质量负向词（blurry, distorted, watermark）和风格冲突词
 - 不要在 prompt 中重复相同概念"""
 

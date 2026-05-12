@@ -79,13 +79,12 @@ class EvaluationResult(TypedDict):
     feedback: str
 
 
-class ImageRecord(TypedDict):
-    id: str
-    image_url: str
-    caption: str
-    prompt: str
-    design_state: dict
-    provider: str
+class RagImage(TypedDict, total=False):
+    file_id: str                # copy saved under backend/uploads/
+    image_url: str              # /static/uploads/<file_id>.<ext>
+    source_image_id: str        # image_library.id in image-rag-mcp
+    ambience_note: str          # VLM atmosphere description (lighting/color/mood only)
+    sent: bool                  # already attached to the current generation request
 
 
 # ---------------------------------------------------------------------------
@@ -97,13 +96,13 @@ class AgentState(MessagesState):
     reference_images: list[ReferenceImageAnalysis]
     control_image: ControlImage | None
     annotated_image: AnnotatedImage | None
+    rag_image: RagImage | None
+    pending_rag_candidates: list[dict] | None
     workspace: PromptDraft | None
     ready_to_generate: bool
     generation_results: list[GenerationResult]
     retry_count: int
     last_evaluation: EvaluationResult | None
-    similar_cases: list[ImageRecord]
-    last_search_signature: dict | None
     best_generation_result: GenerationResult | None
     current_task_id: str | None
     phase: Literal["collecting", "generating", "evaluating", "interrupted", "done"]
@@ -136,6 +135,8 @@ def default_agent_state() -> dict:
         "reference_images": [],
         "control_image": None,
         "annotated_image": None,
+        "rag_image": None,
+        "pending_rag_candidates": None,
         "workspace": {
             "keywords": {},
             "llm_description": "",
@@ -147,8 +148,6 @@ def default_agent_state() -> dict:
         "generation_results": [],
         "retry_count": 0,
         "last_evaluation": None,
-        "similar_cases": [],
-        "last_search_signature": None,
         "best_generation_result": None,
         "current_task_id": None,
         "phase": "collecting",

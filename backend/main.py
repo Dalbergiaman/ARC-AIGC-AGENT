@@ -7,7 +7,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from agent.checkpointer import get_conn_string, init_checkpointer
-from agent.graph import compile_graph
+from agent.graph import compile_graph, set_mcp_client
 from api.routes.chat import router as chat_router
 from api.routes.dashboard import router as dashboard_router
 from api.routes.gallery import router as gallery_router
@@ -38,6 +38,7 @@ def _build_mcp_client() -> MultiServerMCPClient:
 async def lifespan(app: FastAPI):
     app.state.langfuse_enabled = configure_langfuse_from_dashboard()
     app.state.mcp_client = _build_mcp_client()
+    set_mcp_client(app.state.mcp_client)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
