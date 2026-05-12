@@ -3,7 +3,14 @@
 import { useEffect, useRef } from "react";
 
 import { getApiBaseUrl } from "@/lib/api";
-import type { SSEEventType, StyleTemplate } from "@/lib/types";
+import type { RagImageState, SSEEventType, StyleTemplate } from "@/lib/types";
+
+type RagCandidate = {
+  image_id: string;
+  image_url: string;
+  caption?: string;
+  score?: number;
+};
 
 type Handlers = {
   onTextDelta?: (content: string) => void;
@@ -29,6 +36,8 @@ type Handlers = {
     promptTemplate: StyleTemplate | null,
     source: "agent_node" | "enhance_prompt" | "refine_prompt",
   ) => void;
+  onRagCandidates?: (candidates: RagCandidate[], timeout: number) => void;
+  onRagImageUpdate?: (ragImage: RagImageState) => void;
   onError?: (code: string, message: string) => void;
   onDone?: (finishReason: "stop" | "max_retries" | "interrupted") => void;
 };
@@ -49,6 +58,8 @@ export function useSSE({
   onGenerationStart,
   onGenerationDone,
   onPromptUpdate,
+  onRagCandidates,
+  onRagImageUpdate,
   onError,
   onDone,
 }: Options) {
@@ -59,6 +70,8 @@ export function useSSE({
     onGenerationStart,
     onGenerationDone,
     onPromptUpdate,
+    onRagCandidates,
+    onRagImageUpdate,
     onError,
     onDone,
   });
@@ -71,6 +84,8 @@ export function useSSE({
       onGenerationStart,
       onGenerationDone,
       onPromptUpdate,
+      onRagCandidates,
+      onRagImageUpdate,
       onError,
       onDone,
     };
@@ -80,6 +95,8 @@ export function useSSE({
     onGenerationDone,
     onGenerationStart,
     onPromptUpdate,
+    onRagCandidates,
+    onRagImageUpdate,
     onTextDelta,
     onToolEnd,
     onToolStart,
@@ -161,6 +178,15 @@ export function useSSE({
       if (eventType === "error" && typeof data.code === "string" && typeof data.message === "string") {
         handlers.onError?.(data.code, data.message);
       }
+      if (eventType === "rag_candidates" && Array.isArray(data.candidates)) {
+        handlers.onRagCandidates?.(
+          data.candidates as RagCandidate[],
+          typeof data.timeout === "number" ? data.timeout : 600,
+        );
+      }
+      if (eventType === "rag_image_update" && typeof data.file_id === "string") {
+        handlers.onRagImageUpdate?.(data as unknown as RagImageState);
+      }
       if (eventType === "done" && typeof data.finish_reason === "string") {
         doneReceived = true;
         handlers.onDone?.(data.finish_reason as "stop" | "max_retries" | "interrupted");
@@ -177,6 +203,10 @@ export function useSSE({
       handleEvent("generation_done", event);
     const promptUpdateListener = (event: MessageEvent<string>) =>
       handleEvent("prompt_update", event);
+    const ragCandidatesListener = (event: MessageEvent<string>) =>
+      handleEvent("rag_candidates", event);
+    const ragImageUpdateListener = (event: MessageEvent<string>) =>
+      handleEvent("rag_image_update", event);
     const errorListener = (event: MessageEvent<string>) => handleEvent("error", event);
     const doneListener = (event: MessageEvent<string>) => handleEvent("done", event);
 
@@ -186,6 +216,8 @@ export function useSSE({
     eventSource.addEventListener("generation_start", generationStartListener);
     eventSource.addEventListener("generation_done", generationDoneListener);
     eventSource.addEventListener("prompt_update", promptUpdateListener);
+    eventSource.addEventListener("rag_candidates", ragCandidatesListener);
+    eventSource.addEventListener("rag_image_update", ragImageUpdateListener);
     eventSource.addEventListener("error", errorListener);
     eventSource.addEventListener("done", doneListener);
     eventSource.onerror = () => {

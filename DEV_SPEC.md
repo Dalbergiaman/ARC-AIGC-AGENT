@@ -1560,7 +1560,7 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
   - 顺带把 control_image / annotated_image 从前端 sessionId localStorage 迁到服务端持久化（D-4 顺手解决老问题）
   - 删除会话时清理 `backend/uploads/` 下该 session 的 rag 副本
   - 验证：选完候选 → 刷新页面 → workspace 里 rag_image / control / annotated 都还在；删会话 → uploads 里对应文件没了
-- [ ] **Commit 6 — Add chat popup for RAG candidates with countdown**
+- [x] **Commit 6 — Add chat popup for RAG candidates with countdown**
   - 前端中栏对话区新增候选浮窗组件，消费 `rag_candidates` SSE
   - 浮窗内展示候选缩略图（用 `/static/library/{id}.{ext}` 短 URL）和倒计时（基于 `RAG_BLOCKING_TIMEOUT`）
   - 「选中」按钮调 `POST /api/library/pick` 传 image_id；「跳过」按钮传 null

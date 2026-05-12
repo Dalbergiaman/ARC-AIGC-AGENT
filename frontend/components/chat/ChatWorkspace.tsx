@@ -9,8 +9,9 @@ import { useChatStore } from "@/store/chatStore";
 import { useWorkspaceStore } from "@/store/workspaceStore";
 import { AppSidebar } from "@/components/chat/AppSidebar";
 import { ChatPanel } from "@/components/chat/ChatPanel";
+import { RagCandidatesPopup } from "@/components/chat/RagCandidatesPopup";
 import { WorkspacePanel } from "@/components/workspace/WorkspacePanel";
-import type { SessionResponse } from "@/lib/types";
+import type { RagImageState, SessionResponse } from "@/lib/types";
 
 type Props = {
   sessionId: string;
@@ -40,6 +41,11 @@ export function ChatWorkspace({ sessionId }: Props) {
   const [loadingSession, setLoadingSession] = useState(true);
   const [isResizingWorkspace, setIsResizingWorkspace] = useState(false);
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
+  const [ragPopup, setRagPopup] = useState<{
+    candidates: { image_id: string; image_url: string; caption?: string; score?: number }[];
+    timeout: number;
+    runId: string;
+  } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const {
@@ -314,6 +320,15 @@ export function ChatWorkspace({ sessionId }: Props) {
       });
       setActiveTab("prompt");
     },
+    onRagCandidates: (candidates, timeout) => {
+      if (streamId) {
+        setRagPopup({ candidates, timeout, runId: streamId });
+      }
+    },
+    onRagImageUpdate: (ragImage) => {
+      setRagImage(sessionId, ragImage);
+      setRagPopup(null);
+    },
     onError: (_code, message) => {
       setStreamState("error");
       setErrorMessage(message);
@@ -462,16 +477,27 @@ export function ChatWorkspace({ sessionId }: Props) {
         onToggle={toggleSidebar}
         onDeleteSession={handleDeleteSession}
       />
-      <ChatPanel
-        sessionTitle={sessionTitle}
-        messages={visibleMessages}
-        activeToolStatus={activeToolStatus}
-        generationPreviews={generationPreviews.filter((item) => item.imageUrl)}
-        streamState={streamState}
-        errorMessage={errorMessage}
-        isWelcome={isWelcome}
-        onSubmit={handleSubmit}
-      />
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        <ChatPanel
+          sessionTitle={sessionTitle}
+          messages={visibleMessages}
+          activeToolStatus={activeToolStatus}
+          generationPreviews={generationPreviews.filter((item) => item.imageUrl)}
+          streamState={streamState}
+          errorMessage={errorMessage}
+          isWelcome={isWelcome}
+          onSubmit={handleSubmit}
+        />
+        {ragPopup && (
+          <RagCandidatesPopup
+            candidates={ragPopup.candidates}
+            timeout={ragPopup.timeout}
+            sessionId={sessionId}
+            runId={ragPopup.runId}
+            onClose={() => setRagPopup(null)}
+          />
+        )}
+      </div>
       {isWelcome ? null : workspacePanel}
     </div>
   );
