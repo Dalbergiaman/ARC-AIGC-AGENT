@@ -1173,44 +1173,55 @@ docker exec -it aigc_agent-postgres-1 psql -U postgres -c "CREATE DATABASE aigc_
 
 ---
 
-## search_similar_cases 触发与使用
+## RAG 候选浮窗与 rag_image 第三槽位（D-4 设计）
 
-> ⚠️ **本章节为旧设计（C-3 ~ D-3 阶段的"自动注入 prompt"方案），D-4 起将整章重写。**
->
-> 新设计要点（D-4 commit 1~6 落地）：RAG 召回结果不再自动注入 `enhance_prompt`，改为 `rag_gate_node` 在中栏对话弹候选浮窗，用户 120s 内选中 / 跳过 / 超时不选；选中后图作为 `AgentState.rag_image` 第三槽位参考图，跟 `control_image` / `annotated_image` 并列写入 `GenerationRequest.input_image_urls`，prompt 头部按"图N 为氛围参考：{ambience_note}"追加；`AgentState.similar_cases` 字段将废弃，下方所有"写入 similar_cases / 作为 enhance_prompt 参数"的描述都会移除。当前实现仍是旧链路（`agent/tools/search_library.py` 是 stub 返回空数组），DEV_SPEC 决策记录里有完整新设计描述。
+> 旧设计（"自动注入 prompt 的 similar_cases"）已于 D-4 整章替换。`AgentState.similar_cases` / `last_search_signature` / `make_search_signature` / `signature_changed` / `agent/tools/search_library.py::search_similar_cases` 全部废弃；`agent_system` / `enhance_prompt_system` / `refine_prompt_system` 中的 `similar_cases` 引用、`enhance_prompt` 函数签名的 `similar_cases` 参数也一并删除。
 
-**触发时机**：使用规则门控（`rag_gate`）优先判断，Agent 只在规则允许的范围内补充决策。满足以下任一条件时调用 `search_similar_cases`，将结果存入 `AgentState.similar_cases`：
+### 流程
 
-- 用户明确要求“找类似案例 / 参考风格 / 之前那种效果”。
-- `building_type` 或 `style` 首次变为明确值，且当前 `similar_cases` 为空。
-- `building_type`、`style`、`facade_material`、`surroundings` 任一核心字段相比 `last_search_signature` 明显变化。
-- 即将进入首次 `enhance_prompt`，但 `similar_cases` 为空，且 `building_type` 或 `style` 至少有一个明确值。
+每次进入生成子流程都先经过 `rag_gate_node`：
 
-以下情况不检索：用户只是寒暄、确认、修正非核心细节；当前会话刚检索过且核心设计参数未变化；信息不足以形成有效 query。
+1. `rag_gate_node` 调用 MCP `search_by_text`（query 由 `building_type` / `style` / `facade_material` 拼接，标量过滤用 `building_type` / `style` 非空值），拿到候选列表。
+2. 通过 `QueueEmitter` 推送 `rag_candidates` SSE 事件，前端在中栏对话渲染候选浮窗。
+3. 节点开始 Redis 长轮询：1s 一次，最多 600s（`RAG_BLOCKING_TIMEOUT=600`）。轮询同时检查：
+   - **pick key** `rag_pick:{session_id}:{run_id}`：用户在浮窗点了候选或「跳过」，由 `POST /api/library/pick` 写入。值为 `image_id`（选中）或 sentinel（跳过，如空字符串或 `null`）。
+   - **cancel key** `cancel:{session_id}:{run_id}`：用户在阻塞期间发了新消息，由 chat 路由设置；命中抛 `asyncio.CancelledError`，与 `generate_image` 一致。
+4. 三种退出：
+   - 选中 → state 临时写 `_picked_image_id`，进入 `enhance_prompt` 节点；下载副本 / VLM ambience / 组装 `rag_image` 在 generation 子流程执行（详见 D-4 commit 4）。
+   - 跳过 → 不写 `rag_image`，正常进 `enhance_prompt`。
+   - cancel → 与 `generate_image` 一致抛 `CancelledError`，新一轮 run 重新进入。
+   - timeout（600s 兜底）→ 视同跳过，不写 `rag_image`。
 
-**结果使用**：`similar_cases` 作为参数传给 `enhance_prompt`，LLM 参考历史案例的提示词风格来生成新提示词。
+### `rag_image` 与生成请求
 
-```python
-async def enhance_prompt(
-    design_state: DesignState,
-    reference_analysis: list[ReferenceImageAnalysis],
-    similar_cases: list[ImageRecord]   # RAG 检索结果，可为空列表
-) -> EnhancedPrompt:
-    ...
-```
+选中候选后，generation 子流程做：
 
-`similar_cases` 为空时 `enhance_prompt` 正常工作，RAG 只是锦上添花，不是必要依赖。
-
-检索成功后记录：
+1. 通过 MCP `get_image_by_id` 拿原图短 URL（`/static/library/{id}.{ext}`）。
+2. 调用 `POST /api/library/select` 把图片下载到 `backend/uploads/`，拿到 `{file_id, url}`。
+3. 对该副本跑一次 VLM 分析得到 `ambience_note`（光线 / 色彩 / 氛围 2-3 句，**不写建筑要素**，避免 prompt 风格漂移）。
+4. 写入 `AgentState.rag_image: RagImage`：
 
 ```python
-state["last_search_signature"] = {
-    "building_type": design_state["building_type"],
-    "style": design_state["style"],
-    "facade_material": design_state["facade_material"],
-    "surroundings": design_state["surroundings"],
-}
+class RagImage(TypedDict, total=False):
+    file_id: str
+    image_url: str
+    source_image_id: str   # MCP image_library 表的 image_id
+    ambience_note: str     # VLM 输出的氛围描述
+    sent: bool             # 是否已注入过本轮生成请求
 ```
+
+5. `generate_image` 拼装 `input_image_urls` 时按顺序追加：`[control, annotated, rag]`（按存在性过滤），并在 prompt 头部按实际位置追加"图N 为氛围参考：{ambience_note}"。`enhance_prompt` 不感知 `rag_image` 存在，避免 LLM 阶段改写图位顺序。
+6. `evaluate_generated_image` **不传 `rag_image`**，避免氛围参考被算进相似度评分。
+
+### 开发期 feature flag
+
+Commit 3 引入 env `RAG_BLOCKING_ENABLED`（默认 false）：
+- false：`rag_gate_node` 召回完直接返回，不推 SSE、不阻塞。便于 Commit 3 ~ Commit 5 期间继续联调主链路。
+- true：走完整阻塞 + SSE + 浮窗流程。Commit 6 联调通过后默认改 true。
+
+### 持久化
+
+`rag_image` 跟 `control_image` / `annotated_image` 一并由 Commit 5 落到 `sessions.workspace_state` 的分层 JSON 中（详见下一节"持久化边界"更新）。删除会话时，`backend/uploads/` 下属于该 session 的 rag 副本一并清理。
 
 ---
 
@@ -1512,11 +1523,49 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
 - [x] 编写 `image-rag-mcp/core/storage.py`（图库副本管理：`save_source_url` 下载源 URL（http 或 data URL）到 `library_images/{image_id}.{ext}`，`library_url_for` 生成短 URL，`resolve_library_url` 反解短 URL 为本地 `Path`，`to_data_url` 把本地副本转 base64）
 - [ ] backend FastAPI 挂 `/static/library` 静态目录，让前端能直接展示 RAG 召回的图（D-4 commit 1 一并落地）
 
-**D-4 Agent 侧接入**
+**D-4 Agent 侧接入：RAG 候选浮窗与 rag_image 第三槽位**
 
-- [ ] 编写 `agent/tools/search_library.py`（`search_similar_cases`：调用 MCP `search_by_text`，将 `design_state.building_type` / `style` 非空字段作为标量过滤传入，结果存入 `AgentState.similar_cases`；`search_by_image` 工具暴露但 Agent 侧暂不调用，待后续观察文字检索效果后决定）
-- [ ] 在 `agent/graph.py` 初始化时启动 `MultiServerMCPClient`，将 MCP 检索工具合并进工具列表
-- [ ] 端到端测试：存一张图 → 检索 → 验证结果返回正确
+> 拆 6 个 commit，每个 commit 可独立编译并独立验证。详见上方"RAG 候选浮窗与 rag_image 第三槽位（D-4 设计）"章节。
+
+- [x] **Commit 1 — Backend static mount and library REST contract**
+  - `backend/main.py` 挂 `/static/library` 静态目录，指向 `image-rag-mcp/library_images/`（D-3 遗留 TODO 一并解决）
+  - FastAPI lifespan 初始化 `MultiServerMCPClient` 单例并挂 `app.state.mcp_client`；library_service 和后续 graph 节点都复用同一实例
+  - `backend/services/library_service.py`：封装 MCP 调用，提供 `store_image / search_by_text / search_by_image / get_image_by_id`
+  - `backend/api/routes/library.py`：`POST /api/library/store`（前端"存入图库"按钮）、`POST /api/library/select`（下载到 backend uploads 返 `{file_id, url}`）
+  - 不接 Agent，独立 curl 验证
+- [ ] **Commit 2 — Wire MCP search into Agent and drop similar_cases**
+  - 删除 `AgentState.similar_cases` / `last_search_signature`、`state_utils.py::make_search_signature` / `signature_changed`、`agent/tools/search_library.py::search_similar_cases`、`agent_system` / `enhance_prompt_system` / `refine_prompt_system` 中所有 `similar_cases` 引用、`enhance_prompt` / `_build_prompt_draft` / `_compose_llm_description` 函数签名中的 `similar_cases` 参数
+  - 新增 `AgentState.rag_image: RagImage | None`、`AgentState.pending_rag_candidates`
+  - 新增 `RagImage` TypedDict（file_id / image_url / source_image_id / ambience_note / sent）
+  - `rag_gate_node` 调真实 MCP `search_by_text`，只把候选写进 state，**先不推 SSE、不阻塞**（commit 3 补）
+  - 验证：纯文字对话正常完成；similar_cases 字段消失；rag_gate 调真实 MCP 不报错
+- [ ] **Commit 3 — Emit rag_candidates SSE and block run for user pick**
+  - `core/llm/streaming.py` 新增 `rag_candidates` SSE 事件类型
+  - `rag_gate_node` 增强：召回后推 `rag_candidates`，然后 Redis 长轮询（1s 一次，最多 600s，env `RAG_BLOCKING_TIMEOUT=600`）
+  - 轮询同时检 `rag_pick:{session_id}:{run_id}` 和 `cancel:{session_id}:{run_id}`；cancel 命中抛 `CancelledError`
+  - 退出：选中 → state 写 `_picked_image_id`；skip（pick key value 为 sentinel）→ 不写 rag_image；timeout → 视同跳过
+  - `backend/api/routes/library.py` 新增 `POST /api/library/pick`：写 Redis pending key（接收 `{image_id}`，skip 时 image_id 传 null）
+  - chat.py 路由的新消息中断逻辑兼容：清掉 `rag_pick` key 与设置 cancel flag
+  - 新增 env `RAG_BLOCKING_ENABLED`（默认 false）：false 时 rag_gate 不推 SSE、不阻塞，直接返回；联调通过后改 true
+  - 验证：curl 触发对话进入 generation；SSE 流确认推了 rag_candidates；curl `POST /api/library/pick` 选中后 run 继续；不调 pick 则 600s 超时继续
+- [ ] **Commit 4 — Inject rag_image as third slot in generation request**
+  - 拿到 `_picked_image_id` 后调 MCP `get_image_by_id` 拿短 URL → `POST /api/library/select` 下载到 backend uploads 拿 `{file_id, url}` → 跑 VLM ambience 分析得到 `ambience_note`（光线/色彩/氛围 2-3 句，**不写建筑要素**）→ 写 `state["rag_image"]`
+  - `agent/tools/image_generator.py` 拼装：`input_image_urls = [control, annotated, rag]`（按存在性过滤），prompt 头部按实际位置追加"图N 为氛围参考：{ambience_note}"，与现有"图1结构底图 / 图2批注图"逻辑统一
+  - `evaluate_image_node` 不传 `rag_image` 给评估
+  - 验证：手动构造 control + rag 请求，确认 provider 请求体里图片顺序正确、prompt 含"图N 为氛围参考"
+- [ ] **Commit 5 — Refactor workspace_state and persist rag_image**
+  - `sessions.workspace_state` JSON 重构为分层结构：`{prompt_draft, rag_image, control_image, annotated_image}`
+  - `backend/services/session_service.py` 写入 / 恢复链路兼容新结构；`schema_guard.py` 处理旧记录（旧记录被读为整份 PromptDraft，自动迁移到 `prompt_draft` 子键下）
+  - `GET /api/sessions/{id}` 返回新分层结构；前端 `workspaceStore` 同步消费
+  - 顺带把 control_image / annotated_image 从前端 sessionId localStorage 迁到服务端持久化（D-4 顺手解决老问题）
+  - 删除会话时清理 `backend/uploads/` 下该 session 的 rag 副本
+  - 验证：选完候选 → 刷新页面 → workspace 里 rag_image / control / annotated 都还在；删会话 → uploads 里对应文件没了
+- [ ] **Commit 6 — Add chat popup for RAG candidates with countdown**
+  - 前端中栏对话区新增候选浮窗组件，消费 `rag_candidates` SSE
+  - 浮窗内展示候选缩略图（用 `/static/library/{id}.{ext}` 短 URL）和倒计时（基于 `RAG_BLOCKING_TIMEOUT`）
+  - 「选中」按钮调 `POST /api/library/pick` 传 image_id；「跳过」按钮传 null
+  - 联调通过后把 `RAG_BLOCKING_ENABLED` 默认改 true
+  - 端到端验证：存图 → 新会话生成 → 浮窗弹出 → 选中 → 生成图含氛围特征
 
 ---
 
@@ -1605,6 +1654,14 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
 11. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-12：D-4 拆 6 个 commit 落地，每个 commit 独立可编译可验证。关键决策点（与用户对齐）：
+  1. **MCP client 生命周期**：Commit 1 在 FastAPI lifespan 起 `MultiServerMCPClient` 单例并挂 `app.state.mcp_client`，library_service 与 Commit 2 graph 节点都复用同一实例，避免起两个 stdio 子进程。
+  2. **rag_gate 等待策略**：长 timeout 600s（env `RAG_BLOCKING_TIMEOUT`） + 前端 skip 按钮兜底。120s 太短容易让用户错过候选；不设 timeout 又会留僵尸 run。10 分钟兜底兼顾两端。
+  3. **rag_gate 检 cancel flag**：`rag_gate_node` 长轮询期间同时检 `cancel:{session_id}:{run_id}`，与 `generate_image` 一致。新消息进来能立即打断旧 run，不必等 600s。
+  4. **Commit 3/4 拆分点**：`POST /api/library/pick` 只写 `image_id`（skip 时 null），不在 pick 时同步下载副本。Commit 3 验证范围只到"拿到 image_id"；Commit 4 才做 `get_image_by_id` → `/api/library/select` 下载 → VLM ambience → 写 rag_image。
+  5. **开发期 feature flag**：Commit 3 引入 env `RAG_BLOCKING_ENABLED`（默认 false）。flag 关时 rag_gate 召回完直接返回，不推 SSE、不阻塞，便于 Commit 3 ~ Commit 5 期间继续联调主链路。Commit 6 联调通过后默认改 true。
+  6. **rag_gate 触发策略**：每次进入生成子流程都弹浮窗，用户不想换就点 skip。`AgentState.similar_cases` / `last_search_signature` / `make_search_signature` / `signature_changed` / `search_library.py::search_similar_cases` 全删；`agent_system` / `enhance_prompt_system` / `refine_prompt_system` / `enhance_prompt` / `_build_prompt_draft` / `_compose_llm_description` 中的 `similar_cases` 引用一并清。
+  7. **workspace_state 重构**：Commit 5 把 `sessions.workspace_state` 从扁平 PromptDraft 重构为分层 `{prompt_draft, rag_image, control_image, annotated_image}`。顺手把 control_image / annotated_image 从前端 sessionId localStorage 迁到服务端持久化（DEV_SPEC 老问题）。`schema_guard.py` 自动迁移旧记录到 `prompt_draft` 子键。
 - 2026-05-11：D-3 收尾追加图库副本管理。新增 `image-rag-mcp/core/storage.py`：`save_source_url` 把任意来源（http URL 或 base64 data URL）的图片下载到 `image-rag-mcp/library_images/{image_id}.{ext}`，`library_url_for` 生成短 URL `/static/library/{id}.{ext}`，`resolve_library_url` 把这种短 URL 反解为本地 `Path`。`tools/store.py` 改造：先生成 image_id → 下载源图到本地副本 → 用本地 data URL 跑 caption / 双 embedding → PG/Milvus 都存短 URL；任一插入失败时回滚副本。`tools/search.py` 的 `search_by_image` 加入"短 URL → 本地路径 → data URL"的解析，避免火山方舟拿不到相对 `/static/...` 路径。`scripts/test_d3_stdio.py` 同步更新覆盖：store 后断言磁盘文件存在、搜索结果都是短 URL、`search_by_image` 用短 URL 自查 score≈1.0；cleanup 三件套（PG + Milvus + 本地文件）。`.gitignore` 增加 `image-rag-mcp/library_images/`。**遗留 TODO（D-4 一并处理）**：backend FastAPI 需要把 `image-rag-mcp/library_images/` 挂为 `/static/library` 静态目录，前端才能展示图库召回卡片；可在 `backend/main.py` 的 `app.mount("/static/library", ...)` 中处理，路径通过 `IMAGE_LIBRARY_DIR` 环境变量或 hardcoded 相对路径解析。
 - 2026-05-11：D-3 完成 MCP 工具实现。`core/milvus_client.py` 补齐 `insert` / `search` 两个方法（`search` 支持 `caption_vector` / `image_vector` 两个向量字段，标量过滤仅对 `style` / `building_type` 非空值构造 `expr`，搜索 `ef=64`）；新增 `tools/store.py`（VLM caption → 双 embedding → PG.insert + Milvus.insert，`style` / `building_type` 从 `design_state` 自动提取）、`tools/search.py`（返回 Milvus 字段：image_id / caption / image_url / style / building_type / score，不 join PG）、`tools/retrieve.py`（按 id 查 PG）；`server.py` 注册 4 个新工具。`scripts/test_d3_stdio.py` 通过 stdio E2E 覆盖 store×2→search_by_text→style filter→search_by_image self-match→get_image_by_id→cleanup 全链路；发现 FastMCP 新版 list-返回只走 `structuredContent.result`（不再附 text block），测试 parser 已做兼容。**新设计决策（待 D-4 实现）**：RAG 召回的候选图不再自动注入 prompt，改为 `rag_gate_node` 在中栏对话弹候选浮窗（最多 120s 阻塞，超时默认不选），用户选中后生成图作为 `rag_image` 第三槽位参考图（跟 control_image / annotated_image 并列）；此时对候选图跑一次 VLM 氛围分析得到 "ambience_note"（光线/色彩/氛围为主，非建筑要素），在 `generate_image_node` 拼 prompt 时按"图3 为氛围参考：{note}"追加，enhance_prompt 不感知 rag_image 存在，从而保证图位顺序在 LLM 阶段不被改写；rag_image 不进入 `evaluate_generated_image` 参与评分；rag_image 与 control_image 一起持久化到 `sessions.workspace_state`；旧 `AgentState.similar_cases` 字段与 `agent/prompts.py` 中 `similar_cases` 引用将在 D-4 一并废弃，候选图走 `backend/uploads/` 本地保存（沿用 `storage_service.download_and_save` 通路，以后整体切 MinIO 时统一切）。
 - 2026-05-11：D-2 完成 VLM caption + 双向量端到端。新增 `image-rag-mcp/core/vlm_caption.py`，复用 dashboard.yaml 的 LLM 配置（支持 bailian / volcengine），用 httpx 直调 chat completions（不依赖 backend 包，避免反向依赖），System Prompt 约束输出 2-3 句紧凑中文建筑描述。`scripts/test_d2_smoke.py` 用 `backend/generated/` 下真实生成图（base64 data URL）验证：caption→2048 维文本向量、image→2048 维图像向量。**重要修正**：实测 `doubao-embedding-vision-251215` 是跨模态共享 2048 维空间，文字与图像同维同空间（最大 2048，可降维 1024），并非 DEV_SPEC 原写的 "image 3072 维"。已同步修改 DEV_SPEC 中"火山引擎文本/图像 embedding 实现"与"Milvus Collection / Schema"两处维度描述，`image-rag-mcp/config.py` 中 `IMAGE_VECTOR_DIM` 从 3072 改为 2048，旧 Milvus collection 已 drop 并按 2048 × 2048 重建。境外图（如 Wikipedia）会被火山方舟下载失败，本地图片必须先转 data URL 再调 VLM / image embedding，跟 `agent/tools/image_analysis.py` 的 `_to_data_url` 一致。
