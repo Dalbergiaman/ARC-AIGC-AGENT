@@ -13,6 +13,7 @@ from pydantic import BaseModel, ValidationError, field_validator
 
 from agent.prompts import evaluate_image_system
 from agent.state import DesignState, EvaluationResult, ReferenceImageAnalysis
+from agent.tools.image_analysis import _to_data_url
 from core.llm.client import LLMClient
 from core.observability import message_preview, observe, update_current_generation
 
@@ -101,8 +102,10 @@ async def evaluate_generated_image(
     """
     has_reference = bool(reference_images)
 
-    # Build image list: generated image first, then reference images
-    images = [image_url] + [r["image_url"] for r in reference_images if r.get("image_url")]
+    # Convert localhost/relative URLs to base64 data URLs so external VLMs can access them.
+    images = [_to_data_url(image_url)] + [
+        _to_data_url(r["image_url"]) for r in reference_images if r.get("image_url")
+    ]
 
     messages = [
         SystemMessage(content=evaluate_image_system(

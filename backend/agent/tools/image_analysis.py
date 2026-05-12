@@ -18,9 +18,13 @@ def _to_data_url(image_url: str) -> str:
     """Convert a local static URL to a base64 data URL so external VLMs can access it.
 
     External URLs (http/https pointing outside localhost) are returned unchanged.
-    Local paths (/static/uploads/...) and localhost URLs are read from disk.
+    Local paths (/static/uploads/..., /static/generated/...) and localhost URLs
+    are read from disk.
     """
-    local_prefix = "/static/uploads/"
+    _LOCAL_DIRS = {
+        "/static/uploads/": Path(settings.UPLOAD_DIR),
+        "/static/generated/": Path(settings.GENERATED_DIR),
+    }
 
     # Normalise: strip scheme+host for localhost URLs
     path_part = image_url
@@ -29,19 +33,19 @@ def _to_data_url(image_url: str) -> str:
             path_part = image_url[len(prefix):]
             break
 
-    if not path_part.startswith(local_prefix):
-        # External URL — return as-is
-        return image_url
+    for url_prefix, disk_dir in _LOCAL_DIRS.items():
+        if path_part.startswith(url_prefix):
+            filename = path_part[len(url_prefix):]
+            file_path = disk_dir / filename
+            if not file_path.exists():
+                return image_url  # fallback
+            mime, _ = mimetypes.guess_type(str(file_path))
+            mime = mime or "image/jpeg"
+            data = base64.b64encode(file_path.read_bytes()).decode()
+            return f"data:{mime};base64,{data}"
 
-    filename = path_part[len(local_prefix):]
-    file_path = Path(settings.UPLOAD_DIR) / filename
-    if not file_path.exists():
-        return image_url  # fallback: let VLM try the URL directly
-
-    mime, _ = mimetypes.guess_type(str(file_path))
-    mime = mime or "image/jpeg"
-    data = base64.b64encode(file_path.read_bytes()).decode()
-    return f"data:{mime};base64,{data}"
+    # External URL — return as-is
+    return image_url
 
 
 @tool

@@ -177,7 +177,7 @@ async def stream_agent_events(
         pending_emitter = emitter._queue
 
         while not (graph_done and emitter_done):
-            # Wait for whichever queue has something
+            # Wait for whichever queue has something, with a keepalive timeout.
             get_graph = asyncio.ensure_future(pending_graph.get()) if not graph_done else None
             get_emit = asyncio.ensure_future(pending_emitter.get()) if not emitter_done else None
 
@@ -185,7 +185,13 @@ async def stream_agent_events(
             if not futs:
                 break
 
-            done, _ = await asyncio.wait(futs, return_when=asyncio.FIRST_COMPLETED)
+            while True:
+                done, _ = await asyncio.wait(futs, return_when=asyncio.FIRST_COMPLETED, timeout=15)
+                if done:
+                    break
+                # No events in 15 s — send SSE comment to keep the connection alive
+                # (this happens during rag_gate blocking wait for user pick).
+                yield ": keepalive\n\n"
 
             # Cancel the futures that didn't fire
             for f in futs:
