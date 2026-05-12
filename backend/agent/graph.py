@@ -468,9 +468,74 @@ async def rag_gate_node(state: AgentState) -> dict:
 
     out: dict = {"pending_rag_candidates": candidates}
     if picked_image_id:
-        out["_picked_image_id"] = picked_image_id
-        update_current_span(output={"picked_image_id": picked_image_id})
+        rag_image = await _materialise_rag_image(client, picked_image_id)
+        if rag_image is not None:
+            out["rag_image"] = rag_image
+            update_current_span(output={
+                "picked_image_id": picked_image_id,
+                "rag_image_file_id": rag_image.get("file_id"),
+                "ambience_note_preview": (rag_image.get("ambience_note", "") or "")[:80],
+            })
+        else:
+            update_current_span(
+                level="WARNING",
+                status_message=f"failed to materialise rag_image for {picked_image_id}",
+            )
     return out
+
+
+async def _materialise_rag_image(
+    client: MultiServerMCPClient,
+    image_id: str,
+) -> dict | None:
+    """Download the picked library image into backend/uploads and run VLM ambience.
+
+    Returns a RagImage dict, or None if the library record is missing or any
+    step fails (the run continues without a rag_image).
+    """
+    from agent.prompts import ambience_rag_image_system
+    from services.storage_service import download_and_save_library_image
+
+    try:
+        record = await library_service.get_image_by_id(client, image_id=image_id)
+    except Exception:
+        return None
+    if not record:
+        return None
+
+    source_url = record.get("image_url") or ""
+    if not source_url:
+        return None
+
+    try:
+        file_id, url = await download_and_save_library_image(source_url)
+    except Exception:
+        return None
+
+    # Build an absolute URL for the VLM call (the saved file is /static/uploads/<id>.<ext>).
+    # We pass the relative path; image_analysis converts it to a data URL internally.
+    from agent.tools.image_analysis import _to_data_url
+    try:
+        data_url = _to_data_url(url)
+    except Exception:
+        data_url = url
+
+    try:
+        ambience_note = await _llm.ainvoke(
+            messages=[SystemMessage(content=ambience_rag_image_system()),
+                      HumanMessage(content="请描述这张图的氛围。")],
+            images=[data_url],
+        )
+    except Exception:
+        ambience_note = ""
+
+    return {
+        "file_id": file_id,
+        "image_url": url,
+        "source_image_id": image_id,
+        "ambience_note": (ambience_note or "").strip(),
+        "sent": False,
+    }
 
 
 async def _poll_for_rag_pick(

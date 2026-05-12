@@ -209,5 +209,5 @@ class TestImageGeneratorTool(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(captured["input_image_urls"], ["https://example.com/annotated.png"])
         self.assertIsNone(captured["control_image_url"])
-        self.assertIn("输入图为带批注效果图", captured["prompt"])
+        self.assertIn("图1为带批注效果图", captured["prompt"])
         self.assertIn("批注说明：入口增加暖光", captured["prompt"])

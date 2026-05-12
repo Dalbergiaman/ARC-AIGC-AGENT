@@ -1548,7 +1548,7 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
   - chat.py 路由的新消息中断逻辑兼容：清掉 `rag_pick` key 与设置 cancel flag
   - 新增 env `RAG_BLOCKING_ENABLED`（默认 false）：false 时 rag_gate 不推 SSE、不阻塞，直接返回；联调通过后改 true
   - 验证：curl 触发对话进入 generation；SSE 流确认推了 rag_candidates；curl `POST /api/library/pick` 选中后 run 继续；不调 pick 则 600s 超时继续
-- [ ] **Commit 4 — Inject rag_image as third slot in generation request**
+- [x] **Commit 4 — Inject rag_image as third slot in generation request**
   - 拿到 `_picked_image_id` 后调 MCP `get_image_by_id` 拿短 URL → `POST /api/library/select` 下载到 backend uploads 拿 `{file_id, url}` → 跑 VLM ambience 分析得到 `ambience_note`（光线/色彩/氛围 2-3 句，**不写建筑要素**）→ 写 `state["rag_image"]`
   - `agent/tools/image_generator.py` 拼装：`input_image_urls = [control, annotated, rag]`（按存在性过滤），prompt 头部按实际位置追加"图N 为氛围参考：{ambience_note}"，与现有"图1结构底图 / 图2批注图"逻辑统一
   - `evaluate_image_node` 不传 `rag_image` 给评估

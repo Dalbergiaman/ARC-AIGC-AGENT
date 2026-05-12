@@ -51,29 +51,42 @@ async def generate_image(
     run_id = state.get("run_id", "")
 
     # Build request dict for the Celery task. reference_images are semantic-only;
-    # control_image and annotated_image are explicit img2img anchors sent to providers.
+    # control_image, annotated_image, and rag_image are explicit img2img anchors sent to providers.
     control_image = state.get("control_image") or {}
     annotated_image = state.get("annotated_image") or {}
+    rag_image = state.get("rag_image") or {}
     control_url: str | None = control_image.get("image_url") if isinstance(control_image, dict) else None
     annotated_url: str | None = annotated_image.get("image_url") if isinstance(annotated_image, dict) else None
-    input_image_urls = [url for url in [control_url, annotated_url] if url]
+    rag_url: str | None = rag_image.get("image_url") if isinstance(rag_image, dict) else None
+    input_image_urls = [url for url in [control_url, annotated_url, rag_url] if url]
+
+    # Build prompt header explaining each image slot by its actual position
     prompt = enhanced_prompt.prompt
-    annotated_note = str(annotated_image.get("note", "") or "").strip()
-    if control_url and annotated_url:
-        prompt_parts = [
-            "图1为结构底图，保持建筑体量、透视、尺度和主要空间关系。",
-            "图2为带批注效果图，按批注说明调整。",
-        ]
+    slot_labels: list[str] = []
+    slot_index = 0
+    if control_url:
+        slot_index += 1
+        slot_labels.append(
+            f"图{slot_index}为结构底图，保持建筑体量、透视、尺度和主要空间关系。"
+        )
+    if annotated_url:
+        slot_index += 1
+        annotated_note = str(annotated_image.get("note", "") or "").strip()
+        line = f"图{slot_index}为带批注效果图，按批注说明调整。"
         if annotated_note:
-            prompt_parts.append(f"批注说明：{annotated_note}")
-        prompt_parts.append(prompt)
-        prompt = "\n".join(prompt_parts)
-    elif annotated_url:
-        prompt_parts = ["输入图为带批注效果图，按批注说明调整。"]
-        if annotated_note:
-            prompt_parts.append(f"批注说明：{annotated_note}")
-        prompt_parts.append(prompt)
-        prompt = "\n".join(prompt_parts)
+            line += f"批注说明：{annotated_note}"
+        slot_labels.append(line)
+    if rag_url:
+        slot_index += 1
+        ambience_note = str(rag_image.get("ambience_note", "") or "").strip()
+        line = f"图{slot_index}为氛围参考"
+        if ambience_note:
+            line += f"：{ambience_note}"
+        else:
+            line += "。"
+        slot_labels.append(line)
+    if slot_labels:
+        prompt = "\n".join([*slot_labels, prompt])
 
     request_dict = {
         "prompt": prompt,
@@ -89,6 +102,7 @@ async def generate_image(
             "negative_prompt": enhanced_prompt.negative_prompt,
             "control_image_url": control_url,
             "annotated_image_url": annotated_url,
+            "rag_image_url": rag_url,
             "input_image_count": len(input_image_urls),
             "semantic_reference_image_count": len(state.get("reference_images") or []),
             "session_id": session_id,

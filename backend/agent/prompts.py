@@ -115,6 +115,17 @@ def agent_system(
 - 若用户中断，`phase` 改为 `interrupted`，`ready_to_generate` 为 false"""
 
 
+def ambience_rag_image_system() -> str:
+    return """你是一位建筑摄影氛围分析师。请只关注这张图的光线、色彩、氛围三方面，2-3 句中文紧凑描述。
+
+要求：
+- 描述光线时段、方向、明暗对比、色温
+- 描述主导色彩与色调倾向
+- 描述整体氛围（如静谧、明亮通透、戏剧化、温暖、冷峻等）
+- 不要描述建筑体量、风格、材质、形态、视角、周边环境等元素，这些会由其他参考图负责
+- 输出纯文本，不带任何 JSON 包裹或前缀"""
+
+
 def analyze_image_system() -> str:
     return """你是一位专业建筑师，请分析这张建筑参考图，提取以下信息并以 JSON 格式输出。
 
