@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "uploads"
     GENERATED_DIR: str = "generated"
     IMAGE_LIBRARY_DIR: str = str(_REPO_ROOT / "image-rag-mcp" / "library_images")
+    IMAGE_LIBRARY_STORAGE: str = "local"
+    IMAGE_LIBRARY_MINIO_ENDPOINT: str = "http://localhost:9000"
+    IMAGE_LIBRARY_MINIO_PUBLIC_ENDPOINT: str = "http://localhost:9000"
+    IMAGE_LIBRARY_MINIO_ACCESS_KEY: str = "minioadmin"
+    IMAGE_LIBRARY_MINIO_SECRET_KEY: str = "minioadmin"
+    IMAGE_LIBRARY_MINIO_BUCKET: str = "image-library"
     IMAGE_RAG_MCP_SERVER: str = str(_REPO_ROOT / "image-rag-mcp" / "server.py")
     IMAGE_RAG_MCP_PYTHON: str = str(_REPO_ROOT / "image-rag-mcp" / ".venv" / "bin" / "python")
     RAG_BLOCKING_ENABLED: bool = True

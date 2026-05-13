@@ -4,7 +4,7 @@ Pipeline:
   1. Boot server.py via stdio_client, list_tools should include the 5 tools.
   2. store_generated_image x 2  -> get two image_ids.
   3. Verify library_images/{image_id}.{ext} was created on disk.
-  4. Verify PG/Milvus image_url is the short /static/library/... form.
+  4. Verify PG/Milvus image_url uses the configured library storage URL.
   5. search_by_text("modern villa") -> at least one of the stored hits.
   6. search_by_image passing the stored short URL -> self-match (top result).
   7. get_image_by_id(stored_id) -> returns the prompt we wrote in step 2.
@@ -31,9 +31,17 @@ from pymilvus import connections, utility, Collection  # noqa: E402
 import asyncpg  # noqa: E402
 
 import config  # noqa: E402
+from core.storage import delete_published_library_object  # noqa: E402
 
 _GENERATED_DIR = ROOT.parent / "backend" / "generated"
 _LIBRARY_DIR = ROOT / "library_images"
+
+
+def _is_expected_library_url(url: str) -> bool:
+    if config.get_image_library_storage() == "minio":
+        prefix = f"{config.get_minio_public_endpoint()}/{config.get_minio_bucket()}/"
+        return url.startswith(prefix)
+    return url.startswith("/static/library/")
 
 
 def _to_data_url(path: Path) -> str:
@@ -81,6 +89,7 @@ async def _cleanup(image_ids: list[str]) -> None:
 
     for image_id in image_ids:
         for p in _LIBRARY_DIR.glob(f"{image_id}.*"):
+            await delete_published_library_object(image_id, p.suffix.lstrip("."))
             p.unlink(missing_ok=True)
 
 
@@ -138,8 +147,8 @@ async def main() -> None:
                     payload = _parse_tool_result(res)
                     print("   ->", {k: payload[k] for k in ("image_id", "image_url")})
                     assert payload and payload.get("image_id"), "store returned no image_id"
-                    assert payload["image_url"].startswith("/static/library/"), (
-                        f"stored URL should be short form, got {payload['image_url']!r}"
+                    assert _is_expected_library_url(payload["image_url"]), (
+                        f"stored URL should match storage mode, got {payload['image_url']!r}"
                     )
                     stored.append({**s, "image_id": payload["image_id"], "caption": payload["caption"], "stored_url": payload["image_url"]})
                     stored_ids.append(payload["image_id"])
@@ -160,9 +169,9 @@ async def main() -> None:
                 assert hits, "no search hits"
                 top_ids = [h["image_id"] for h in hits]
                 assert stored[0]["image_id"] in top_ids, "modern villa not retrieved"
-                # returned image_url must be the short library URL
-                assert all(h["image_url"].startswith("/static/library/") for h in hits if h["image_id"] in stored_ids), (
-                    "search hits missing short library URL"
+                # returned image_url must match configured library storage.
+                assert all(_is_expected_library_url(h["image_url"]) for h in hits if h["image_id"] in stored_ids), (
+                    "search hits missing expected library URL"
                 )
 
                 # 2b. search_by_text + filter
@@ -198,8 +207,8 @@ async def main() -> None:
                 assert row["prompt"] == stored[0]["prompt"]
                 assert row["design_state"]["style"] == "modern_minimal"
                 assert row["caption"] == stored[0]["caption"]
-                assert row["image_url"].startswith("/static/library/"), (
-                    f"PG image_url should be short form, got {row['image_url']!r}"
+                assert _is_expected_library_url(row["image_url"]), (
+                    f"PG image_url should match storage mode, got {row['image_url']!r}"
                 )
 
                 print("OK — all D-3 tools verified")

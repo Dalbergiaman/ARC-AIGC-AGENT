@@ -1,3 +1,4 @@
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -23,12 +24,23 @@ from models.schemas import Base
 
 
 def _build_mcp_client() -> MultiServerMCPClient:
+    env = os.environ.copy()
+    env.update({
+        "IMAGE_LIBRARY_DIR": settings.IMAGE_LIBRARY_DIR,
+        "IMAGE_LIBRARY_STORAGE": settings.IMAGE_LIBRARY_STORAGE,
+        "IMAGE_LIBRARY_MINIO_ENDPOINT": settings.IMAGE_LIBRARY_MINIO_ENDPOINT,
+        "IMAGE_LIBRARY_MINIO_PUBLIC_ENDPOINT": settings.IMAGE_LIBRARY_MINIO_PUBLIC_ENDPOINT,
+        "IMAGE_LIBRARY_MINIO_ACCESS_KEY": settings.IMAGE_LIBRARY_MINIO_ACCESS_KEY,
+        "IMAGE_LIBRARY_MINIO_SECRET_KEY": settings.IMAGE_LIBRARY_MINIO_SECRET_KEY,
+        "IMAGE_LIBRARY_MINIO_BUCKET": settings.IMAGE_LIBRARY_MINIO_BUCKET,
+    })
     return MultiServerMCPClient(
         {
             "image-rag": {
                 "command": settings.IMAGE_RAG_MCP_PYTHON,
                 "args": [settings.IMAGE_RAG_MCP_SERVER],
                 "transport": "stdio",
+                "env": env,
             },
         }
     )
@@ -81,8 +93,6 @@ async def healthcheck() -> dict[str, str]:
 
 
 if settings.STORAGE == "local":
-    import os
-
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     os.makedirs(settings.GENERATED_DIR, exist_ok=True)
     os.makedirs(settings.IMAGE_LIBRARY_DIR, exist_ok=True)

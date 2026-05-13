@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from models.database import get_db
+from models.database import get_session as get_db
 from services import library_service
 from services.session_service import mark_stored_in_library
 from services.storage_service import download_and_save_library_image

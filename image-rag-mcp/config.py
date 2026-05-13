@@ -8,6 +8,12 @@ import yaml
 _DEFAULT_PG_DSN = "postgresql://postgres:postgres@localhost:5432/aigc_image_library"
 _DEFAULT_MILVUS_HOST = "localhost"
 _DEFAULT_MILVUS_PORT = "19530"
+_DEFAULT_IMAGE_LIBRARY_STORAGE = "local"
+_DEFAULT_MINIO_ENDPOINT = "http://localhost:9000"
+_DEFAULT_MINIO_PUBLIC_ENDPOINT = "http://localhost:9000"
+_DEFAULT_MINIO_ACCESS_KEY = "minioadmin"
+_DEFAULT_MINIO_SECRET_KEY = "minioadmin"
+_DEFAULT_MINIO_BUCKET = "image-library"
 _DEFAULT_DASHBOARD_YAML = (
     Path(__file__).resolve().parent.parent / "backend" / "config" / "dashboard.yaml"
 )
@@ -38,6 +44,33 @@ def get_dashboard_yaml_path() -> Path:
 def get_library_dir() -> Path:
     raw = os.getenv("IMAGE_LIBRARY_DIR")
     return Path(raw).resolve() if raw else _DEFAULT_LIBRARY_DIR
+
+
+def get_image_library_storage() -> str:
+    return os.getenv("IMAGE_LIBRARY_STORAGE", _DEFAULT_IMAGE_LIBRARY_STORAGE).lower()
+
+
+def get_minio_endpoint() -> str:
+    return os.getenv("IMAGE_LIBRARY_MINIO_ENDPOINT", _DEFAULT_MINIO_ENDPOINT).rstrip("/")
+
+
+def get_minio_public_endpoint() -> str:
+    return os.getenv(
+        "IMAGE_LIBRARY_MINIO_PUBLIC_ENDPOINT",
+        _DEFAULT_MINIO_PUBLIC_ENDPOINT,
+    ).rstrip("/")
+
+
+def get_minio_access_key() -> str:
+    return os.getenv("IMAGE_LIBRARY_MINIO_ACCESS_KEY", _DEFAULT_MINIO_ACCESS_KEY)
+
+
+def get_minio_secret_key() -> str:
+    return os.getenv("IMAGE_LIBRARY_MINIO_SECRET_KEY", _DEFAULT_MINIO_SECRET_KEY)
+
+
+def get_minio_bucket() -> str:
+    return os.getenv("IMAGE_LIBRARY_MINIO_BUCKET", _DEFAULT_MINIO_BUCKET)
 
 
 def load_dashboard_config() -> dict[str, Any]:

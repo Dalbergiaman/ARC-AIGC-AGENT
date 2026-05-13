@@ -6,8 +6,9 @@ Pipeline:
   2. Generate VLM caption for the local file (data URL).
   3. Embed caption -> caption_vector (2048-d).
   4. Embed image   -> image_vector   (2048-d).
-  5. Insert PG row + Milvus entity, storing the short ``/static/library/...``
-     URL (backend FastAPI serves this as a static directory).
+  5. Insert PG row + Milvus entity, storing the configured library URL. In
+     local mode this is ``/static/library/...``; in MinIO mode it is a public
+     MinIO HTTP URL that can be opened from Attu/Milvus.
 
 Scalar fields (style / building_type) are extracted from design_state so the
 caller does not have to pass them separately.
@@ -19,7 +20,12 @@ import config
 from core.embedding.factory import ImageEmbeddingFactory, TextEmbeddingFactory
 from core.milvus_client import MilvusImageLibraryClient
 from core.pg_client import ImageLibraryPGClient
-from core.storage import library_url_for, save_source_url, to_data_url
+from core.storage import (
+    delete_published_library_object,
+    publish_library_object,
+    save_source_url,
+    to_data_url,
+)
 from core.vlm_caption import generate_caption
 
 
@@ -41,9 +47,10 @@ async def store_generated_image(
     image_id = str(uuid.uuid4())
 
     local_path, ext = await save_source_url(image_url, image_id)
+    stored_url = ""
     try:
         local_data_url = to_data_url(local_path)
-        stored_url = library_url_for(image_id, ext)
+        stored_url = await publish_library_object(local_path, image_id, ext)
 
         caption = await generate_caption(local_data_url)
 
@@ -77,6 +84,7 @@ async def store_generated_image(
     except Exception:
         # Library copy is orphaned if PG/Milvus insert fails — clean it up so
         # the filesystem stays consistent with the index.
+        await delete_published_library_object(image_id, ext)
         local_path.unlink(missing_ok=True)
         raise
 
