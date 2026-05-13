@@ -76,6 +76,22 @@ _TOOL_SUMMARIES: dict[str, str] = {
     "generate_image": "正在生成图像...",
 }
 
+_NODE_STATUS_START: dict[str, str] = {
+    "rag_gate": "正在检索图库参考...",
+    "enhance_prompt": "正在整理生成提示词...",
+    "generate_image": "正在提交图像生成任务...",
+    "evaluate_image": "正在检查生成结果...",
+    "refine_prompt": "正在根据评估结果优化提示词...",
+}
+
+_NODE_STATUS_END: dict[str, str] = {
+    "rag_gate": "图库参考处理完成",
+    "enhance_prompt": "生成提示词已整理完成",
+    "generate_image": "图像生成阶段完成",
+    "evaluate_image": "生成结果评估完成",
+    "refine_prompt": "提示词优化完成，准备重新生成",
+}
+
 # Extra emitter event types (not LangGraph tool events):
 #   rag_candidates    — rag_gate emits candidate list for frontend popup
 #   rag_image_update  — rag_gate emits assembled rag_image after user pick
@@ -130,6 +146,27 @@ def _parse_sse_chunk(chunk: str) -> tuple[str | None, dict]:
     return event_type, data
 
 
+def extract_reply(raw: str) -> str | None:
+    """Extract user-facing reply from the agent JSON envelope."""
+    text = raw.strip()
+    if text.startswith("```"):
+        parts = text.split("```")
+        if len(parts) >= 2:
+            text = parts[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, dict):
+        reply = parsed.get("reply")
+        if isinstance(reply, str) and reply.strip():
+            return reply.strip()
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Main streaming function
 # ---------------------------------------------------------------------------
@@ -152,6 +189,7 @@ async def stream_agent_events(
     finish_reason = "stop"
     saw_chat_model_stream = False
     emitted_state_texts: set[str] = set()
+    emitted_reply = False
 
     async def _graph_task() -> None:
         nonlocal finish_reason
@@ -231,6 +269,15 @@ async def stream_agent_events(
                         event_id += 1
                         yield sse_chunk
 
+                        if not emitted_reply:
+                            _, data = _parse_sse_chunk(sse_chunk)
+                            content = data.get("content")
+                            reply = extract_reply(content) if isinstance(content, str) else None
+                            if reply:
+                                emitted_reply = True
+                                event_id += 1
+                                yield _sse("agent_reply", {"content": reply}, event_id)
+
                 # --- Emitter event (generation_start / generation_done) ---
                 elif fut is get_emit:
                     if item is None:
@@ -279,6 +326,20 @@ def _map_langgraph_event(
         content = _extract_ai_message_content(event.get("data", {}).get("chunk"))
         if content:
             return _sse("text_delta", {"content": content}, current_id + 1)
+
+    if kind == "on_chain_start" and name in _NODE_STATUS_START:
+        return _sse("agent_status", {
+            "stage": name,
+            "status": "running",
+            "summary": _NODE_STATUS_START[name],
+        }, current_id + 1)
+
+    if kind == "on_chain_end" and name in _NODE_STATUS_END:
+        return _sse("agent_status", {
+            "stage": name,
+            "status": "done",
+            "summary": _NODE_STATUS_END[name],
+        }, current_id + 1)
 
     if kind == "on_tool_start":
         tool_name = name or event.get("data", {}).get("name", "")

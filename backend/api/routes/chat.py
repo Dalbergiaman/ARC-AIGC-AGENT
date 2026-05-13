@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from core.llm.streaming import _parse_sse_chunk, stream_agent_events
+from core.llm.streaming import _parse_sse_chunk, extract_reply as extract_agent_reply, stream_agent_events
 from core.observability import (
     message_preview,
     set_current_trace_io,
@@ -268,6 +268,7 @@ async def _generate_sse(
 ) -> AsyncIterator[str]:
     r = _redis()
     assistant_text_parts: list[str] = []
+    assistant_reply_text: str | None = None
     should_persist_assistant = should_run_agent
     try:
         # --- Reconnection: replay buffered events first ---
@@ -386,6 +387,11 @@ async def _generate_sse(
                     if isinstance(content, str):
                         assistant_text_parts.append(content)
 
+                if should_persist_assistant and event_type == "agent_reply":
+                    content = data.get("content")
+                    if isinstance(content, str) and content.strip():
+                        assistant_reply_text = content.strip()
+
                 if event_type == "prompt_update" and isinstance(data, dict):
                     await update_prompt_draft(db, session_id, {
                         "keywords": data.get("keywords", {}),
@@ -494,8 +500,8 @@ async def _generate_sse(
                 # then fire title generation in the background (non-blocking).
                 if should_persist_assistant and event_type == "done":
                     assistant_text = "".join(assistant_text_parts).strip()
-                    if assistant_text:
-                        reply_text = _extract_reply(assistant_text) or assistant_text
+                    reply_text = assistant_reply_text or extract_agent_reply(assistant_text) or assistant_text
+                    if reply_text:
                         set_current_trace_io(output=message_preview(reply_text))
                         update_current_span(
                             output=message_preview(reply_text),
@@ -542,28 +548,6 @@ async def _clear_active_run(
     active_run = await redis.get(active_key)
     if active_run == stream_id:
         await redis.delete(active_key)
-
-
-def _extract_reply(raw: str) -> str | None:
-    """Extract the 'reply' field from agent JSON output.
-
-    The agent streams raw JSON (including design_state_updates, phase, etc.).
-    Only the 'reply' field should be persisted and shown to the user.
-    Falls back to None if parsing fails, so callers can keep the raw text.
-    """
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        text = "\n".join(lines[1:-1]).strip()
-    try:
-        import json as _json
-        data = _json.loads(text)
-        reply = data.get("reply", "")
-        if isinstance(reply, str) and reply.strip():
-            return reply.strip()
-    except Exception:
-        pass
-    return None
 
 
 # ---------------------------------------------------------------------------

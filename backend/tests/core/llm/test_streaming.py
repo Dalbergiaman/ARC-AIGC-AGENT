@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from core.llm.streaming import get_current_emitter, stream_agent_events
+from core.llm.streaming import extract_reply, get_current_emitter, stream_agent_events
 
 
 class FakeGraph:
@@ -39,6 +39,11 @@ class TestStreaming(unittest.IsolatedAsyncioTestCase):
             chunks.append(chunk)
 
         self.assertTrue(any("event: prompt_update" in chunk for chunk in chunks), chunks)
+
+    def test_extract_reply_from_agent_json(self):
+        raw = '```json\n{"reply":"可以，现在开始生成。","phase":"generating"}\n```'
+
+        self.assertEqual(extract_reply(raw), "可以，现在开始生成。")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 "use client";
 
-import type { ChatMessage, GenerationPreview, ToolStatus } from "@/lib/types";
+import type { AgentStatus, ChatMessage, GenerationPreview, ToolStatus } from "@/lib/types";
 
 import { InputBar } from "@/components/chat/InputBar";
 import { MessageList } from "@/components/chat/MessageList";
@@ -9,6 +9,7 @@ type Props = {
   sessionTitle: string;
   messages: ChatMessage[];
   activeToolStatus: ToolStatus | null;
+  agentStatusesByMessage: Record<string, AgentStatus[]>;
   generationPreviews: GenerationPreview[];
   streamState: "idle" | "submitting" | "streaming" | "error";
   errorMessage: string | null;
@@ -20,6 +21,7 @@ export function ChatPanel({
   sessionTitle,
   messages,
   activeToolStatus,
+  agentStatusesByMessage,
   generationPreviews,
   streamState,
   errorMessage,
@@ -65,6 +67,7 @@ export function ChatPanel({
         <MessageList
           messages={messages}
           activeToolStatus={activeToolStatus}
+          agentStatusesByMessage={agentStatusesByMessage}
           generationPreviews={generationPreviews}
         />
       </div>

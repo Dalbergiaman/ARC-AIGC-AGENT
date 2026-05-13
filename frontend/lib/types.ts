@@ -122,8 +122,17 @@ export type ToolStatus = {
   summary: string;
 };
 
+export type AgentStatus = {
+  id: string;
+  stage: string;
+  status: "running" | "done" | "error";
+  summary: string;
+};
+
 export type SSEEventPayloadMap = {
   text_delta: { content: string };
+  agent_reply: { content: string };
+  agent_status: { stage: string; status: "running" | "done" | "error"; summary: string };
   tool_start: { tool: string; input?: Record<string, unknown>; summary?: string };
   tool_end: { tool: string; summary: string };
   generation_start: { task_id: string; run_id?: string };

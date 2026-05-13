@@ -14,6 +14,8 @@ type RagCandidate = {
 
 type Handlers = {
   onTextDelta?: (content: string) => void;
+  onAgentReply?: (content: string) => void;
+  onAgentStatus?: (stage: string, status: "running" | "done" | "error", summary: string) => void;
   onToolStart?: (tool: string, summary: string) => void;
   onToolEnd?: (tool: string, summary: string) => void;
   onGenerationStart?: (taskId: string, runId?: string) => void;
@@ -54,6 +56,8 @@ export function useSSE({
   streamId,
   enabled = true,
   onTextDelta,
+  onAgentReply,
+  onAgentStatus,
   onToolStart,
   onToolEnd,
   onGenerationStart,
@@ -67,10 +71,13 @@ export function useSSE({
 }: Options) {
   const handlersRef = useRef<Handlers>({
     onTextDelta,
+    onAgentReply,
+    onAgentStatus,
     onToolStart,
     onToolEnd,
     onGenerationStart,
     onGenerationDone,
+    onGenerationError,
     onPromptUpdate,
     onRagCandidates,
     onRagImageUpdate,
@@ -81,6 +88,8 @@ export function useSSE({
   useEffect(() => {
     handlersRef.current = {
       onTextDelta,
+      onAgentReply,
+      onAgentStatus,
       onToolStart,
       onToolEnd,
       onGenerationStart,
@@ -101,6 +110,8 @@ export function useSSE({
     onPromptUpdate,
     onRagCandidates,
     onRagImageUpdate,
+    onAgentReply,
+    onAgentStatus,
     onTextDelta,
     onToolEnd,
     onToolStart,
@@ -128,6 +139,17 @@ export function useSSE({
       const handlers = handlersRef.current;
       if (eventType === "text_delta" && typeof data.content === "string") {
         handlers.onTextDelta?.(data.content);
+      }
+      if (eventType === "agent_reply" && typeof data.content === "string") {
+        handlers.onAgentReply?.(data.content);
+      }
+      if (
+        eventType === "agent_status" &&
+        typeof data.stage === "string" &&
+        (data.status === "running" || data.status === "done" || data.status === "error") &&
+        typeof data.summary === "string"
+      ) {
+        handlers.onAgentStatus?.(data.stage, data.status, data.summary);
       }
       if (eventType === "tool_start" && typeof data.tool === "string") {
         handlers.onToolStart?.(data.tool, typeof data.summary === "string" ? data.summary : data.tool);
@@ -203,6 +225,8 @@ export function useSSE({
     };
 
     const textDeltaListener = (event: MessageEvent<string>) => handleEvent("text_delta", event);
+    const agentReplyListener = (event: MessageEvent<string>) => handleEvent("agent_reply", event);
+    const agentStatusListener = (event: MessageEvent<string>) => handleEvent("agent_status", event);
     const toolStartListener = (event: MessageEvent<string>) => handleEvent("tool_start", event);
     const toolEndListener = (event: MessageEvent<string>) => handleEvent("tool_end", event);
     const generationStartListener = (event: MessageEvent<string>) =>
@@ -221,6 +245,8 @@ export function useSSE({
     const doneListener = (event: MessageEvent<string>) => handleEvent("done", event);
 
     eventSource.addEventListener("text_delta", textDeltaListener);
+    eventSource.addEventListener("agent_reply", agentReplyListener);
+    eventSource.addEventListener("agent_status", agentStatusListener);
     eventSource.addEventListener("tool_start", toolStartListener);
     eventSource.addEventListener("tool_end", toolEndListener);
     eventSource.addEventListener("generation_start", generationStartListener);

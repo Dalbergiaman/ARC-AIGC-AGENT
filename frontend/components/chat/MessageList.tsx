@@ -1,11 +1,15 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { Check, Loader2, X } from "lucide-react";
+
 import { getApiBaseUrl } from "@/lib/api";
-import type { ChatMessage, GenerationPreview, ToolStatus } from "@/lib/types";
+import type { AgentStatus, ChatMessage, GenerationPreview, ToolStatus } from "@/lib/types";
 
 type Props = {
   messages: ChatMessage[];
   activeToolStatus: ToolStatus | null;
+  agentStatusesByMessage: Record<string, AgentStatus[]>;
   generationPreviews: GenerationPreview[];
 };
 
@@ -13,27 +17,71 @@ function resolveImageUrl(url: string): string {
   return url.startsWith("/") ? `${getApiBaseUrl()}${url}` : url;
 }
 
-function PreviewGrid({ previews }: { previews: GenerationPreview[] }) {
+function PreviewGrid({
+  previews,
+  onOpen,
+}: {
+  previews: GenerationPreview[];
+  onOpen: (url: string) => void;
+}) {
   const visible = previews.filter((p) => p.imageUrl);
   if (!visible.length) return null;
   return (
     <div className="mt-3 flex flex-wrap gap-2">
       {visible.map((preview) => (
-        <div key={preview.taskId} className="overflow-hidden rounded-lg border border-black/8 bg-white">
+        <button
+          key={preview.taskId}
+          type="button"
+          onClick={() => onOpen(resolveImageUrl(preview.imageUrl!))}
+          className="overflow-hidden rounded-lg border border-black/8 bg-white transition hover:border-black/20 focus:outline-none focus:ring-2 focus:ring-black/20"
+          aria-label="放大查看生成结果"
+        >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={resolveImageUrl(preview.imageUrl!)}
             alt="生成结果缩略图"
             className="h-32 w-auto object-contain"
           />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function StatusList({ statuses }: { statuses: AgentStatus[] }) {
+  if (!statuses.length) return null;
+  return (
+    <div className="mt-3 space-y-1.5 rounded-md border border-black/6 bg-black/[0.025] px-3 py-2">
+      {statuses.map((item) => (
+        <div key={item.id} className="flex items-center gap-2 text-xs text-muted-foreground">
+          {item.status === "running" ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : item.status === "done" ? (
+            <Check className="size-3.5" />
+          ) : (
+            <X className="size-3.5" />
+          )}
+          <span>{item.summary}</span>
         </div>
       ))}
     </div>
   );
 }
 
-export function MessageList({ messages, activeToolStatus, generationPreviews }: Props) {
+export function MessageList({ messages, activeToolStatus, agentStatusesByMessage, generationPreviews }: Props) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const unanchored = generationPreviews.filter((p) => !p.assistantMessageId && p.imageUrl);
+
+  useEffect(() => {
+    if (!previewUrl) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setPreviewUrl(null);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [previewUrl]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-6">
@@ -47,6 +95,7 @@ export function MessageList({ messages, activeToolStatus, generationPreviews }: 
         const isAssistant = message.role === "assistant";
         const isLast = index === messages.length - 1;
         const linked = generationPreviews.filter((p) => p.assistantMessageId === message.id);
+        const statuses = agentStatusesByMessage[message.id] ?? [];
 
         if (isAssistant) {
           return (
@@ -68,7 +117,8 @@ export function MessageList({ messages, activeToolStatus, generationPreviews }: 
                     {activeToolStatus.summary}
                   </div>
                 ) : null}
-                <PreviewGrid previews={linked} />
+                <StatusList statuses={statuses} />
+                <PreviewGrid previews={linked} onOpen={setPreviewUrl} />
               </div>
             </div>
           );
@@ -86,15 +136,47 @@ export function MessageList({ messages, activeToolStatus, generationPreviews }: 
       {unanchored.length > 0 ? (
         <div className="flex flex-wrap gap-2">
           {unanchored.map((preview) => (
-            <div key={preview.taskId} className="overflow-hidden rounded-lg border border-black/8 bg-white">
+            <button
+              key={preview.taskId}
+              type="button"
+              onClick={() => setPreviewUrl(resolveImageUrl(preview.imageUrl!))}
+              className="overflow-hidden rounded-lg border border-black/8 bg-white transition hover:border-black/20 focus:outline-none focus:ring-2 focus:ring-black/20"
+              aria-label="放大查看生成结果"
+            >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={resolveImageUrl(preview.imageUrl!)}
                 alt="生成结果缩略图"
                 className="h-32 w-auto object-contain"
               />
-            </div>
+            </button>
           ))}
+        </div>
+      ) : null}
+
+      {previewUrl ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-4"
+          onClick={() => setPreviewUrl(null)}
+        >
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setPreviewUrl(null);
+            }}
+            aria-label="关闭预览"
+            className="absolute right-5 top-5 rounded-md bg-white/90 p-2 text-black shadow hover:bg-white focus:outline-none focus:ring-2 focus:ring-white/80"
+          >
+            <X className="size-5" />
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={previewUrl}
+            alt="生成结果大图"
+            onClick={(event) => event.stopPropagation()}
+            className="max-h-[92vh] max-w-[92vw] rounded-md bg-white object-contain shadow-2xl"
+          />
         </div>
       ) : null}
     </div>

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { ChatMessage, GenerationPreview, ToolStatus } from "@/lib/types";
+import type { AgentStatus, ChatMessage, GenerationPreview, ToolStatus } from "@/lib/types";
 
 type StreamState = "idle" | "submitting" | "streaming" | "error";
 
@@ -9,6 +9,7 @@ type ChatStore = {
   messages: ChatMessage[];
   streamState: StreamState;
   activeToolStatus: ToolStatus | null;
+  agentStatusesByMessage: Record<string, AgentStatus[]>;
   generationPreviews: GenerationPreview[];
   currentAssistantMessageId: string | null;
   currentAssistantText: string;
@@ -22,6 +23,7 @@ type ChatStore = {
   finalizeAssistantMessage: () => void;
   setStreamState: (state: StreamState) => void;
   setToolStatus: (status: ToolStatus | null) => void;
+  appendAgentStatus: (status: Omit<AgentStatus, "id">) => void;
   upsertGenerationPreview: (preview: GenerationPreview) => void;
   setGenerationPreviews: (previews: GenerationPreview[]) => void;
   failRunningPreviews: () => void;
@@ -38,6 +40,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   messages: [],
   streamState: "idle",
   activeToolStatus: null,
+  agentStatusesByMessage: {},
   generationPreviews: [],
   currentAssistantMessageId: null,
   currentAssistantText: "",
@@ -49,6 +52,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       currentAssistantMessageId: null,
       currentAssistantText: "",
       activeToolStatus: null,
+      agentStatusesByMessage: {},
       errorMessage: null,
     }),
   addUserMessage: (content) =>
@@ -127,6 +131,27 @@ export const useChatStore = create<ChatStore>((set) => ({
     }),
   setStreamState: (streamState) => set({ streamState }),
   setToolStatus: (activeToolStatus) => set({ activeToolStatus }),
+  appendAgentStatus: (status) =>
+    set((state) => {
+      if (!state.currentAssistantMessageId) return state;
+      const current = state.agentStatusesByMessage[state.currentAssistantMessageId] ?? [];
+      const previous = current[current.length - 1];
+      if (previous?.stage === status.stage && previous.status === status.status && previous.summary === status.summary) {
+        return state;
+      }
+      return {
+        agentStatusesByMessage: {
+          ...state.agentStatusesByMessage,
+          [state.currentAssistantMessageId]: [
+            ...current,
+            {
+              ...status,
+              id: `${status.stage}-${status.status}-${current.length}`,
+            },
+          ],
+        },
+      };
+    }),
   upsertGenerationPreview: (preview) =>
     set((state) => {
       const existing = state.generationPreviews.findIndex((item) => item.taskId === preview.taskId);
@@ -162,6 +187,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       messages: [],
       streamState: "idle",
       activeToolStatus: null,
+      agentStatusesByMessage: {},
       generationPreviews: [],
       currentAssistantMessageId: null,
       currentAssistantText: "",

@@ -11,7 +11,7 @@ import { AppSidebar } from "@/components/chat/AppSidebar";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { RagCandidatesPopup } from "@/components/chat/RagCandidatesPopup";
 import { WorkspacePanel } from "@/components/workspace/WorkspacePanel";
-import type { RagImageState, SessionResponse } from "@/lib/types";
+import type { SessionResponse } from "@/lib/types";
 
 type Props = {
   sessionId: string;
@@ -53,6 +53,7 @@ export function ChatWorkspace({ sessionId }: Props) {
     messages,
     streamState,
     activeToolStatus,
+    agentStatusesByMessage,
     generationPreviews,
     errorMessage,
     currentAssistantText,
@@ -65,6 +66,7 @@ export function ChatWorkspace({ sessionId }: Props) {
     finalizeAssistantMessage,
     setStreamState,
     setToolStatus,
+    appendAgentStatus,
     upsertGenerationPreview,
     setGenerationPreviews,
     failRunningPreviews,
@@ -291,16 +293,27 @@ export function ChatWorkspace({ sessionId }: Props) {
       setStreamState("streaming");
       appendAssistantText(content);
     },
+    onAgentReply: (content) => {
+      replaceAssistantText(content);
+    },
+    onAgentStatus: (stage, status, summary) => {
+      appendAgentStatus({ stage, status, summary });
+      setToolStatus({ tool: stage, summary });
+    },
     onToolStart: (_tool, summary) => {
       setToolStatus({ tool: _tool, summary });
+      appendAgentStatus({ stage: _tool, status: "running", summary });
     },
     onToolEnd: (_tool, summary) => {
       setToolStatus({ tool: _tool, summary });
+      appendAgentStatus({ stage: _tool, status: "done", summary });
     },
     onGenerationStart: (taskId, runId) => {
+      appendAgentStatus({ stage: "generate_image", status: "running", summary: "图像生成任务已提交，正在等待结果..." });
       upsertGenerationPreview({ taskId, imageUrl: "", runId, status: "running" });
     },
     onGenerationDone: (payload) => {
+      appendAgentStatus({ stage: "generate_image", status: "done", summary: "图像生成完成，正在展示结果" });
       upsertGenerationPreview({
         taskId: payload.taskId,
         imageUrl: payload.imageUrl,
@@ -315,6 +328,7 @@ export function ChatWorkspace({ sessionId }: Props) {
       setActiveTab("images");
     },
     onGenerationError: (taskId) => {
+      appendAgentStatus({ stage: "generate_image", status: "error", summary: "图像生成失败" });
       upsertGenerationPreview({ taskId, status: "failed" });
     },
     onPromptUpdate: (keywords, llmDescription, customDescription, negativePrompt, promptTemplate) => {
@@ -490,6 +504,7 @@ export function ChatWorkspace({ sessionId }: Props) {
           sessionTitle={sessionTitle}
           messages={visibleMessages}
           activeToolStatus={activeToolStatus}
+          agentStatusesByMessage={agentStatusesByMessage}
           generationPreviews={generationPreviews.filter((item) => item.imageUrl)}
           streamState={streamState}
           errorMessage={errorMessage}
