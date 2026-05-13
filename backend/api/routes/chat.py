@@ -327,6 +327,9 @@ async def _generate_sse(
         }
         if pending_ref_images:
             input_state["reference_images"] = pending_ref_images
+            input_state["_current_vision_images"] = [
+                image["image_url"] for image in pending_ref_images if image.get("image_url")
+            ]
         if control_image_raw:
             control_image = json.loads(control_image_raw)
             control_url = control_image.get("url", "")
@@ -338,6 +341,10 @@ async def _generate_sse(
                 "note": control_image.get("note", ""),
                 "sent": True,
             }
+            input_state["_current_vision_images"] = [
+                *input_state.get("_current_vision_images", []),
+                control_url,
+            ]
         if annotated_image_raw:
             annotated_image = json.loads(annotated_image_raw)
             annotated_url = annotated_image.get("url", "")

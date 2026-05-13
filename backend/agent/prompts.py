@@ -94,7 +94,9 @@ def agent_system(
 - 如果用户修改材质，引导光线和质感，例如侧光纹理、阴天漫射、黄昏反射或冷暖色温。
 - 如果用户修改光线，引导氛围和场景，例如安静清晨、真实午后、戏剧化黄昏或克制阴天。
 - 如果用户修改风格，引导细部密度、场景搭配或材质选择。
-- 如果用户上传参考图，引导用户明确参考意图：构图、材质、色调、光线、环境氛围中的哪一项。
+- 如果用户发送图生图结构底图，本轮必须结合图片和上下文简单分析可优化方向，例如体量关系、透视、立面层次、开窗节奏、材质替换、景观界面或光线氛围；不要只回复"已收到"。
+- 如果用户发送参考图且说明了参考方向，本轮必须只围绕该方向分析如何参考这张图，例如构图、材质、色调、光线或环境氛围；不要把参考图当作图生图结构底图。
+- 如果用户发送参考图但没有说明参考方向，本轮必须做全图简要分析，分别点出最值得参考的构图、色彩、风格、材质、光线或环境方向。
 - 如果用户明确要求生成，简短确认进入生成，不再继续发散，以免阻塞动作。
 - 灵感建议只能写在 `reply` 中，不能擅自写入 `design_state_updates`；只有用户明确采纳时才更新 DesignState。
 - 回复长度通常为 3～6 句，中文自然表达，专业但不要像报告。
@@ -138,6 +140,46 @@ reply 示例：
 - `reply` 是展示给用户的主对话回复，不要暴露 JSON 结构或技术细节；它应少复述、多引导，围绕下一步设计选择展开，而不是机械确认或表单式追问
 - 若 `ready_to_generate` 为 true，`phase` 改为 `generating`；不要因为信息完整度高而自行改为生成
 - 若用户中断，`phase` 改为 `interrupted`，`ready_to_generate` 为 false"""
+
+
+def _reference_prompt_line(image: ReferenceImageAnalysis) -> str:
+    intent = str(image.get("reference_intent", "") or "").strip()
+    note = str(image.get("intent_note", "") or "").strip()
+    description = str(image.get("description", "") or "").strip()
+    style = str(image.get("style", "") or "").strip()
+    material = str(image.get("facade_material", "") or "").strip()
+    lighting = str(image.get("lighting", "") or "").strip()
+    viewpoint = str(image.get("viewpoint", "") or "").strip()
+    color = str(image.get("color_palette", "") or "").strip()
+
+    if intent == "composition":
+        core = "；".join(filter(None, [f"构图/视角：{viewpoint}" if viewpoint else "", description]))
+    elif intent == "color":
+        core = "；".join(filter(None, [f"色彩：{color}" if color else "", description]))
+    elif intent == "style":
+        core = "；".join(filter(None, [f"建筑样式：{style}" if style else "", description]))
+    elif intent == "material":
+        core = "；".join(filter(None, [f"材质：{material}" if material else "", description]))
+    elif intent == "lighting":
+        core = "；".join(filter(None, [f"光线：{lighting}" if lighting else "", description]))
+    elif intent == "surroundings":
+        core = description
+    else:
+        core = "；".join(filter(None, [
+            description,
+            f"风格：{style}" if style else "",
+            f"材质：{material}" if material else "",
+            f"光线：{lighting}" if lighting else "",
+            f"色彩：{color}" if color else "",
+        ]))
+
+    if not core:
+        core = "参考图已有视觉分析，但可用特征较少"
+    suffix = "；".join(filter(None, [
+        f"参考意图：{intent}" if intent else "参考意图：全图分析",
+        f"用户说明：{note}" if note else "",
+    ]))
+    return f"{core}（{suffix}）"
 
 
 def ambience_rag_image_system() -> str:
@@ -213,16 +255,10 @@ def enhance_prompt_system(
     if reference_analysis:
         descs = []
         for r in reference_analysis:
-            desc = r.get("description", "")
-            if not desc:
+            line = _reference_prompt_line(r)
+            if not line:
                 continue
-            intent = r.get("reference_intent", "")
-            note = r.get("intent_note", "")
-            suffix = "；".join(filter(None, [
-                f"参考意图：{intent}" if intent else "",
-                f"用户说明：{note}" if note else "",
-            ]))
-            descs.append(f"{desc}（{suffix}）" if suffix else desc)
+            descs.append(line)
         if descs:
             ref_section = "【参考图特征】\n" + "\n".join(f"  - {d}" for d in descs)
 

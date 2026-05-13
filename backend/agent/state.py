@@ -116,6 +116,7 @@ class AgentState(MessagesState):
     turn_id: str
     run_id: str
     # Internal fields passed between generation sub-flow nodes (not persisted long-term)
+    _current_vision_images: list[str] | None
     _enhanced_prompt: dict | None
     _current_gen_result: GenerationResult | None
     _current_generation_persist: dict | None
@@ -160,6 +161,7 @@ def default_agent_state() -> dict:
         "phase": "collecting",
         "turn_id": "",
         "run_id": "",
+        "_current_vision_images": None,
         "_enhanced_prompt": None,
         "_current_gen_result": None,
         "_current_generation_persist": None,

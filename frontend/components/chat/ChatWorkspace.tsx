@@ -11,7 +11,7 @@ import { AppSidebar } from "@/components/chat/AppSidebar";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { RagCandidatesPopup } from "@/components/chat/RagCandidatesPopup";
 import { WorkspacePanel } from "@/components/workspace/WorkspacePanel";
-import type { SessionResponse } from "@/lib/types";
+import type { ReferenceIntent, SessionResponse, SubmitMessagePayload } from "@/lib/types";
 
 type Props = {
   sessionId: string;
@@ -33,6 +33,16 @@ function extractReply(raw: string): string | null {
   }
   return null;
 }
+
+const INTENT_LABELS: Record<ReferenceIntent, string> = {
+  composition: "构图",
+  color: "色彩",
+  style: "建筑样式",
+  material: "材质",
+  lighting: "光线",
+  surroundings: "环境",
+  other: "其他",
+};
 
 export function ChatWorkspace({ sessionId }: Props) {
   const router = useRouter();
@@ -86,7 +96,6 @@ export function ChatWorkspace({ sessionId }: Props) {
     setWorkspaceWidthRatio,
     getControlImage,
     setControlImage,
-    getAnnotatedImage,
     setAnnotatedImage,
     getReferenceImages,
     getPromptDraft,
@@ -94,13 +103,11 @@ export function ChatWorkspace({ sessionId }: Props) {
     setSessionPromptDraft,
     setSessionReferenceImages,
     updateControlImage,
-    updateAnnotatedImage,
     updateReferenceImage,
     setRagImage,
   } = useWorkspaceStore();
 
   const controlImage = getControlImage(sessionId);
-  const annotatedImage = getAnnotatedImage(sessionId);
   const referenceImages = getReferenceImages(sessionId);
 
   useEffect(() => {
@@ -248,9 +255,12 @@ export function ChatWorkspace({ sessionId }: Props) {
     setErrorMessage,
     setMessages,
     setSessionId,
+    setControlImage,
+    setAnnotatedImage,
     setSessionPromptDraft,
     setSessionReferenceImages,
     setGenerationPreviews,
+    setRagImage,
     workspaceHydrated,
   ]);
 
@@ -372,7 +382,7 @@ export function ChatWorkspace({ sessionId }: Props) {
     },
   });
 
-  async function handleSubmit(content: string) {
+  async function submitPayload(content: string, payload: SubmitMessagePayload, afterSubmitted?: () => void) {
     setErrorMessage(null);
     setToolStatus(null);
     setStreamState("submitting");
@@ -382,59 +392,9 @@ export function ChatWorkspace({ sessionId }: Props) {
     addUserMessage(content);
     beginAssistantMessage();
 
-    // Build payload — only include images not yet sent
-    const readyControlImage =
-      controlImage && !controlImage.uploading && !controlImage.error && controlImage.url
-        ? controlImage
-        : null;
-    const readyAnnotatedImage =
-      annotatedImage && !annotatedImage.uploading && !annotatedImage.error && annotatedImage.url
-        ? annotatedImage
-        : null;
-    const readyImages = referenceImages.filter((img) => !img.uploading && !img.error && img.url && !img.sent);
-    const payload = {
-      content,
-      ...(readyControlImage && {
-        control_image: {
-          file_id: readyControlImage.fileId,
-          url: readyControlImage.url,
-          note: readyControlImage.note ?? "",
-        },
-      }),
-      ...(readyAnnotatedImage && {
-        annotated_image: {
-          file_id: readyAnnotatedImage.fileId,
-          url: readyAnnotatedImage.url,
-          note: readyAnnotatedImage.note ?? "",
-        },
-      }),
-      ...(readyImages.length > 0 && {
-        reference_images: readyImages.map((img) => ({
-          file_id: img.fileId,
-          url: img.url,
-          intent: img.intent,
-          note: img.note ?? "",
-        })),
-      }),
-      workspace: {
-        keywords: promptDraft.keywords,
-        llm_description: promptDraft.llm_description,
-        custom_description: promptDraft.custom_description,
-        negative_prompt: promptDraft.negative_prompt,
-        prompt_template: promptDraft.prompt_template,
-      },
-    };
-
     try {
       const response = await submitChatMessage(sessionId, payload);
-      if (readyControlImage) {
-        updateControlImage(sessionId, { sent: true });
-      }
-      if (readyAnnotatedImage) {
-        updateAnnotatedImage(sessionId, { sent: true });
-      }
-      // Mark submitted images as sent (keep them visible, don't clear)
-      readyImages.forEach((img) => updateReferenceImage(sessionId, img.fileId, { sent: true }));
+      afterSubmitted?.();
       setStreamId(response.stream_id);
       setStreamState("streaming");
     } catch (error) {
@@ -442,6 +402,71 @@ export function ChatWorkspace({ sessionId }: Props) {
       finalizeAssistantMessage();
       setErrorMessage(error instanceof Error ? error.message : "发送消息失败");
     }
+  }
+
+  function workspacePayload(): NonNullable<SubmitMessagePayload["workspace"]> {
+    return {
+      keywords: promptDraft.keywords,
+      llm_description: promptDraft.llm_description,
+      custom_description: promptDraft.custom_description,
+      negative_prompt: promptDraft.negative_prompt,
+      prompt_template: promptDraft.prompt_template,
+    };
+  }
+
+  async function handleSubmit(content: string) {
+    await submitPayload(content, {
+      content,
+      workspace: workspacePayload(),
+    });
+  }
+
+  async function handleSendControlImage() {
+    if (!controlImage || controlImage.uploading || controlImage.error || !controlImage.url || controlImage.sent) {
+      return;
+    }
+    const content = controlImage.note?.trim()
+      ? `我发送了一张图生图结构底图。底图说明：${controlImage.note.trim()}。请分析这张底图后续可以怎样优化。`
+      : "我发送了一张图生图结构底图，请分析这张底图后续可以怎样优化。";
+    await submitPayload(
+      content,
+      {
+        content,
+        control_image: {
+          file_id: controlImage.fileId,
+          url: controlImage.url,
+          note: controlImage.note ?? "",
+        },
+        workspace: workspacePayload(),
+      },
+      () => updateControlImage(sessionId, { sent: true }),
+    );
+  }
+
+  async function handleSendReferenceImage(fileId: string) {
+    const image = referenceImages.find((img) => img.fileId === fileId);
+    if (!image || image.uploading || image.error || !image.url || image.sent) {
+      return;
+    }
+    const intentLabel = INTENT_LABELS[image.intent];
+    const note = image.note?.trim();
+    const content = note
+      ? `我发送了一张参考图，主要参考方向是：${intentLabel}。补充说明：${note}。请分析如何用于后续效果图。`
+      : `我发送了一张参考图，主要参考方向是：${intentLabel}。请分析如何用于后续效果图。`;
+    await submitPayload(
+      content,
+      {
+        content,
+        reference_images: [{
+          file_id: image.fileId,
+          url: image.url,
+          intent: image.intent,
+          note: image.note ?? "",
+        }],
+        workspace: workspacePayload(),
+      },
+      () => updateReferenceImage(sessionId, image.fileId, { sent: true }),
+    );
   }
 
   const handleWorkspaceResizeStart = useCallback(() => {
@@ -476,9 +501,12 @@ export function ChatWorkspace({ sessionId }: Props) {
       widthRatio={workspaceWidthRatio}
       generationPreviews={generationPreviews}
       isResizing={isResizingWorkspace}
+      streamBusy={streamState === "submitting" || streamState === "streaming"}
       onTabChange={setActiveTab}
       onToggle={toggleWorkspace}
       onResizeStart={handleWorkspaceResizeStart}
+      onSendControlImage={handleSendControlImage}
+      onSendReferenceImage={handleSendReferenceImage}
     />
   );
 

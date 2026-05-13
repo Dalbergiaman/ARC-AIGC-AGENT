@@ -13,9 +13,12 @@ type Props = {
   widthRatio: number;
   generationPreviews: GenerationPreview[];
   isResizing: boolean;
+  streamBusy: boolean;
   onTabChange: (tab: WorkspaceTab) => void;
   onToggle: () => void;
   onResizeStart: () => void;
+  onSendControlImage: () => void;
+  onSendReferenceImage: (fileId: string) => void;
 };
 
 export function WorkspacePanel({
@@ -25,9 +28,12 @@ export function WorkspacePanel({
   widthRatio,
   generationPreviews,
   isResizing,
+  streamBusy,
   onTabChange,
   onToggle,
   onResizeStart,
+  onSendControlImage,
+  onSendReferenceImage,
 }: Props) {
   if (collapsed) {
     return (
@@ -99,7 +105,12 @@ export function WorkspacePanel({
         {/* Content */}
         <div className="min-h-0 flex-1 overflow-y-auto">
           {activeTab === "prompt" ? (
-            <PromptReferenceTab sessionId={sessionId} />
+            <PromptReferenceTab
+              sessionId={sessionId}
+              streamBusy={streamBusy}
+              onSendControlImage={onSendControlImage}
+              onSendReferenceImage={onSendReferenceImage}
+            />
           ) : (
             <GeneratedImagesTab sessionId={sessionId} generationPreviews={generationPreviews} />
           )}

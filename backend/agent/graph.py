@@ -209,6 +209,14 @@ def _latest_human_text(messages: list) -> str:
     return ""
 
 
+def _vision_urls_for_agent(state: AgentState) -> list[str]:
+    """Return images explicitly sent in the current turn for the main VLM reply."""
+    urls = [str(url) for url in (state.get("_current_vision_images") or []) if url]
+
+    seen: set[str] = set()
+    return [url for url in urls if not (url in seen or seen.add(url))]
+
+
 def has_explicit_generation_intent(messages: list) -> bool:
     """Return True only when the latest user message explicitly asks to generate.
 
@@ -247,6 +255,7 @@ async def agent_node(state: AgentState) -> dict:
     design_state = dict(state.get("design_state") or {})
     reference_images = list(state.get("reference_images") or [])
     control_image = state.get("control_image")
+    vision_image_urls = _vision_urls_for_agent(state)
     messages = list(state.get("messages") or [])
     explicit_generation_intent = has_explicit_generation_intent(messages)
     workspace = dict(state.get("workspace") or {})
@@ -258,6 +267,7 @@ async def agent_node(state: AgentState) -> dict:
             "latest_message": message_preview(messages[-1].content) if messages else "",
             "design_state": design_state,
             "reference_image_count": len(reference_images),
+            "vision_image_count": len(vision_image_urls),
         },
         metadata={
             "phase": state.get("phase"),
@@ -322,7 +332,7 @@ async def agent_node(state: AgentState) -> dict:
     raw_parts: list[str] = []
 
     try:
-        stream = await _llm.astream(llm_messages)
+        stream = await _llm.astream(llm_messages, images=vision_image_urls or None)
         async for chunk in stream:
             if not chunk:
                 continue
@@ -331,7 +341,7 @@ async def agent_node(state: AgentState) -> dict:
                 await emitter.emit("text_delta", {"content": chunk})
         raw = "".join(raw_parts)
     except Exception:
-        raw = await _llm.ainvoke(llm_messages)
+        raw = await _llm.ainvoke(llm_messages, images=vision_image_urls or None)
         if emitter is not None and raw:
             await emitter.emit("text_delta", {"content": raw})
 
@@ -417,6 +427,7 @@ async def agent_node(state: AgentState) -> dict:
             "ready_to_generate": ready,
             "phase": phase,
             "reference_image_count": len(reference_images),
+            "vision_image_count": len(vision_image_urls),
         }
     )
     return result

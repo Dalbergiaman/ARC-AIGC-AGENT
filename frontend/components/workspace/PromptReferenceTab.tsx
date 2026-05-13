@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Upload, X } from "lucide-react";
+import { Loader2, Send, Upload, X } from "lucide-react";
 
 import { getApiBaseUrl, deleteUpload, listStyleTemplates } from "@/lib/api";
 import { useWorkspaceStore } from "@/store/workspaceStore";
@@ -21,9 +21,17 @@ const INTENT_OPTIONS = Object.entries(INTENT_LABELS) as [ReferenceIntent, string
 
 type Props = {
   sessionId: string;
+  streamBusy: boolean;
+  onSendControlImage: () => void;
+  onSendReferenceImage: (fileId: string) => void;
 };
 
-export function PromptReferenceTab({ sessionId }: Props) {
+export function PromptReferenceTab({
+  sessionId,
+  streamBusy,
+  onSendControlImage,
+  onSendReferenceImage,
+}: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const controlFileInputRef = useRef<HTMLInputElement>(null);
   const [styleTemplates, setStyleTemplates] = useState<StyleTemplate[]>([]);
@@ -279,11 +287,20 @@ export function PromptReferenceTab({ sessionId }: Props) {
               <input
                 type="text"
                 value={controlImage.note ?? ""}
-                disabled={controlImage.uploading}
+                disabled={controlImage.uploading || controlImage.sent}
                 placeholder="底图约束说明（可选）"
                 onChange={(e) => updateControlImage(sessionId, { note: e.target.value })}
                 className="w-full rounded-lg border border-black/8 bg-white px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-black/20 disabled:opacity-50"
               />
+              <button
+                type="button"
+                disabled={streamBusy || controlImage.uploading || Boolean(controlImage.error) || !controlImage.url || controlImage.sent}
+                onClick={onSendControlImage}
+                className="inline-flex items-center justify-center gap-1 rounded-lg border border-black/8 bg-white px-2.5 py-1.5 text-xs text-foreground hover:bg-black/[0.04] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Send className="size-3" />
+                {controlImage.sent ? "已发送" : "发送底图"}
+              </button>
             </div>
             <button
               type="button"
@@ -385,6 +402,15 @@ export function PromptReferenceTab({ sessionId }: Props) {
                     }
                     className="w-full rounded-lg border border-black/8 bg-white px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-black/20 disabled:opacity-50"
                   />
+                  <button
+                    type="button"
+                    disabled={streamBusy || img.uploading || Boolean(img.error) || !img.url || img.sent}
+                    onClick={() => onSendReferenceImage(img.fileId)}
+                    className="inline-flex items-center justify-center gap-1 rounded-lg border border-black/8 bg-white px-2.5 py-1.5 text-xs text-foreground hover:bg-black/[0.04] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Send className="size-3" />
+                    {img.sent ? "已发送" : "发送参考图"}
+                  </button>
                 </div>
 
                 <button
