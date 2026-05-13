@@ -22,6 +22,7 @@ class VolcengineClient(ImageGeneratorBase):
             "prompt": request.prompt,
             "size": f"{request.width}x{request.height}",
             "response_format": "url",
+            "watermark": False,
         }
         image_urls = request.input_image_urls or [
             url for url in [request.control_image_url or request.ref_image_url] if url

@@ -24,6 +24,7 @@ class TestProviderPayloads(unittest.IsolatedAsyncioTestCase):
             async def post(self, _endpoint: str, *, headers: dict, json: dict):
                 captured.update(json)
                 return SimpleNamespace(
+                    is_success=True,
                     raise_for_status=lambda: None,
                     json=lambda: {"data": [{"url": "https://example.com/out.png"}]},
                 )
@@ -37,6 +38,7 @@ class TestProviderPayloads(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(captured["image"], "https://example.com/control.png")
+        self.assertIs(captured["watermark"], False)
 
     async def test_volcengine_payload_includes_ordered_input_images(self) -> None:
         captured: dict = {}
@@ -51,6 +53,7 @@ class TestProviderPayloads(unittest.IsolatedAsyncioTestCase):
             async def post(self, _endpoint: str, *, headers: dict, json: dict):
                 captured.update(json)
                 return SimpleNamespace(
+                    is_success=True,
                     raise_for_status=lambda: None,
                     json=lambda: {"data": [{"url": "https://example.com/out.png"}]},
                 )
@@ -70,6 +73,7 @@ class TestProviderPayloads(unittest.IsolatedAsyncioTestCase):
             "https://example.com/control.png",
             "https://example.com/annotated.png",
         ])
+        self.assertIs(captured["watermark"], False)
 
     async def test_grsai_payload_includes_control_image_only(self) -> None:
         captured: dict = {}
