@@ -68,15 +68,22 @@ class GenerationResult(TypedDict, total=False):
     raw_response: dict
 
 
-class EvaluationResult(TypedDict):
+class EvaluationResult(TypedDict, total=False):
     score: float
+    overall_quality_score: float
+    composition_score: float
+    color_lighting_score: float
+    architectural_detail_score: float
+    requirement_score: float
+    reference_score: float | None
+    fatal_issues: list[str]
+    improvement_focus: str
+    feedback: str
+    # Legacy keys kept for old persisted payloads and older tests.
     style_score: float
     material_score: float
     lighting_score: float
-    composition_score: float
     quality_score: float
-    reference_score: float | None
-    feedback: str
 
 
 class RagImage(TypedDict, total=False):

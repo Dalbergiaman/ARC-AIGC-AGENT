@@ -274,7 +274,7 @@ export function PromptReferenceTab({ sessionId }: Props) {
             </div>
             <div className="flex min-w-0 flex-1 flex-col gap-2">
               <div className="text-xs leading-5 text-muted-foreground">
-                作为图生图底图，生成时优先保留建筑形态、透视、尺度和空间关系。
+                作为图生图底图，生成时关注建筑体量、立面、开窗、材质和空间关系，并按本轮要求修改。
               </div>
               <input
                 type="text"

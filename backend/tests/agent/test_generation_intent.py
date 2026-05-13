@@ -1,6 +1,6 @@
 from langchain_core.messages import AIMessage, HumanMessage
 
-from agent.graph import has_explicit_generation_intent, resolve_generation_gate
+from agent.graph import has_explicit_generation_intent, resolve_generation_gate, route_after_evaluate
 
 
 def test_generation_intent_requires_latest_user_message() -> None:
@@ -55,3 +55,33 @@ def test_generation_gate_allows_generation_with_explicit_intent() -> None:
 
     assert ready is True
     assert phase == "generating"
+
+
+def test_route_after_evaluate_does_not_retry_marginal_score_without_fatal_issue() -> None:
+    assert route_after_evaluate({
+        "retry_count": 0,
+        "last_evaluation": {
+            "score": 0.76,
+            "fatal_issues": [],
+        },
+    }) == "__end__"
+
+
+def test_route_after_evaluate_retries_fatal_issue_even_if_score_is_marginal() -> None:
+    assert route_after_evaluate({
+        "retry_count": 0,
+        "last_evaluation": {
+            "score": 0.76,
+            "fatal_issues": ["透视明显错误"],
+        },
+    }) == "refine_prompt"
+
+
+def test_route_after_evaluate_retries_low_score() -> None:
+    assert route_after_evaluate({
+        "retry_count": 0,
+        "last_evaluation": {
+            "score": 0.68,
+            "fatal_issues": [],
+        },
+    }) == "refine_prompt"

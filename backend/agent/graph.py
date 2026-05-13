@@ -24,10 +24,10 @@ from agent.tools.image_generator import NullEmitter, generate_image
 from api.routes.library import RAG_PICK_KEY, RAG_PICK_SKIP_VALUE
 from config import settings
 from core.llm.streaming import get_current_emitter
-from agent.tools.prompt_builder import EnhancedPrompt, enhance_prompt, refine_prompt
+from agent.tools.prompt_builder import EnhancedPrompt, enhance_prompt, refine_prompt, resolve_prompt_language
 from core.llm.client import LLMClient
 from core.observability import message_preview, observe, update_current_span
-from services import library_service
+from services import dashboard_service, library_service
 
 _llm = LLMClient()
 
@@ -88,10 +88,41 @@ def _prompt_keywords(design_state: dict) -> dict[str, str]:
 def _compose_llm_description(
     design_state: dict,
     reference_images: list[dict],
-    user_prompt_hint: str = "",
     llm_reply_hint: str = "",
 ) -> str:
+    def normalize_text(value: str) -> str:
+        return re.sub(r"[\s，。,.；;：:（）()、]+", "", value)
+
+    def is_covered(value: str, text: str) -> bool:
+        normalized_value = normalize_text(value)
+        normalized_text = normalize_text(text)
+        return bool(normalized_value) and normalized_value in normalized_text
+
+    def has_shared_phrase(value: str, text: str, window: int = 4) -> bool:
+        normalized_value = normalize_text(value)
+        normalized_text = normalize_text(text)
+        if len(normalized_value) < window:
+            return False
+        return any(
+            normalized_value[index:index + window] in normalized_text
+            for index in range(0, len(normalized_value) - window + 1)
+        )
+
+    def important_terms(value: str) -> list[str]:
+        terms = re.split(r"[，,；;、\s（）()]+", value)
+        return [term for term in terms if len(normalize_text(term)) >= 3]
+
+    def is_mostly_covered(value: str, text: str) -> bool:
+        if is_covered(value, text):
+            return True
+        terms = important_terms(value)
+        if not terms:
+            return False
+        covered_count = sum(1 for term in terms if is_covered(term, text) or has_shared_phrase(term, text))
+        return covered_count / len(terms) >= 0.5
+
     parts: list[str] = []
+    hint = llm_reply_hint.strip()
     building_type = design_state.get("building_type", "")
     style = design_state.get("style", "")
     facade_material = design_state.get("facade_material", "")
@@ -101,25 +132,38 @@ def _compose_llm_description(
     color_palette = design_state.get("color_palette", "")
     special_requirements = design_state.get("special_requirements", "")
 
-    if building_type or style:
-        parts.append("画面主体清晰、结构完整，强调建筑类型与整体风格的一致性。")
-    if facade_material or color_palette:
-        parts.append("外立面材质和色彩需要写得更具体，避免过于笼统。")
-    if lighting or viewpoint:
-        parts.append("补充明确的光线方向、时间感和观看视角，让画面更有摄影感。")
-    if surroundings:
-        parts.append("把建筑与周边环境的关系交代出来，避免主体悬浮。")
-    if reference_images:
-        parts.append("参考图中的构图、体块关系和视觉重心需要被吸收进描述里。")
-    if special_requirements:
-        parts.append(f"特别要求是：{special_requirements}。")
-    if user_prompt_hint:
-        parts.append(user_prompt_hint.strip())
-    if llm_reply_hint:
-        parts.append(llm_reply_hint.strip())
-    if not parts:
-        parts.append("画面描述保持自然完整，尽量补足人物语言中的细节表达。")
-    return " ".join(parts)
+    if hint:
+        parts.append(hint)
+    if (building_type or style) and not all(is_mostly_covered(str(v), hint) for v in (building_type, style) if v):
+        parts.append(f"{style}{building_type}建筑效果图。".strip())
+    if facade_material and not is_mostly_covered(str(facade_material), hint):
+        material_text = f"外立面采用{facade_material}"
+        if color_palette and not is_mostly_covered(str(color_palette), hint):
+            material_text += f"，色彩以{color_palette}为主"
+        parts.append(material_text + "。")
+    elif color_palette and not is_mostly_covered(str(color_palette), hint):
+        parts.append(f"整体色彩以{color_palette}为主。")
+    if lighting and not is_mostly_covered(str(lighting), hint):
+        parts.append(f"光线为{lighting}。")
+    if viewpoint and not is_mostly_covered(str(viewpoint), hint):
+        parts.append(f"观看视角为{viewpoint}。")
+    if surroundings and not is_mostly_covered(str(surroundings), hint):
+        parts.append(f"周边环境为{surroundings}。")
+    if special_requirements and not is_mostly_covered(str(special_requirements), hint):
+        parts.append(f"特别要求：{special_requirements}。")
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for part in parts:
+        normalized = " ".join(part.split())
+        comparable = normalized.rstrip("。.!！")
+        if not comparable:
+            continue
+        if comparable in seen or any(comparable in existing or existing in comparable for existing in seen):
+            continue
+        deduped.append(normalized)
+        seen.add(comparable)
+    return " ".join(deduped)
 
 
 def _build_prompt_draft(
@@ -127,7 +171,6 @@ def _build_prompt_draft(
     reference_images: list[dict],
     control_image: dict | None = None,
     custom_description: str = "",
-    user_prompt_hint: str = "",
     llm_reply_hint: str = "",
     negative_prompt: str = "",
     prompt_template: dict | None = None,
@@ -137,9 +180,8 @@ def _build_prompt_draft(
         "llm_description": _compose_llm_description(
             design_state=design_state,
             reference_images=reference_images,
-            user_prompt_hint=user_prompt_hint,
             llm_reply_hint=" ".join(filter(None, [
-                "保持图生图底图的建筑体量、空间尺度、透视关系和主要构图。" if control_image else "",
+                "以图生图底图作为建筑要素参考，并按照用户要求进行修改。" if control_image else "",
                 llm_reply_hint,
             ])),
         ),
@@ -209,7 +251,6 @@ async def agent_node(state: AgentState) -> dict:
     explicit_generation_intent = has_explicit_generation_intent(messages)
     workspace = dict(state.get("workspace") or {})
     custom_description = str(workspace.get("custom_description", "") or "")
-    prompt_hint = str(workspace.get("llm_description", "") or "")
     prompt_template = workspace.get("prompt_template") if isinstance(workspace.get("prompt_template"), dict) else None
     updates: dict = {}
     update_current_span(
@@ -338,7 +379,6 @@ async def agent_node(state: AgentState) -> dict:
         reference_images=reference_images,
         control_image=control_image if isinstance(control_image, dict) else None,
         custom_description=custom_description,
-        user_prompt_hint=prompt_hint,
         llm_reply_hint=llm_description,
         negative_prompt=str(workspace.get("negative_prompt", "") or ""),
         prompt_template=prompt_template,
@@ -527,6 +567,7 @@ async def _materialise_rag_image(
             messages=[SystemMessage(content=ambience_rag_image_system()),
                       HumanMessage(content="请描述这张图的氛围。")],
             images=[data_url],
+            enable_thinking=False,
         )
     except Exception:
         ambience_note = ""
@@ -587,6 +628,10 @@ async def enhance_prompt_node(state: AgentState) -> dict:
     design_state = dict(state.get("design_state") or {})
     reference_images = list(state.get("reference_images") or [])
     control_image = state.get("control_image")
+    annotated_image = state.get("annotated_image")
+    latest_user_request = _latest_human_text(list(state.get("messages") or [])).strip()
+    image_model = str(dashboard_service.get_config().get("image_provider", {}).get("model", "") or "")
+    prompt_language = resolve_prompt_language(image_model)
 
     enhanced = await enhance_prompt(
         design_state=design_state,
@@ -594,20 +639,21 @@ async def enhance_prompt_node(state: AgentState) -> dict:
         llm_description=str((state.get("workspace") or {}).get("llm_description", "") or ""),
         custom_description=str((state.get("workspace") or {}).get("custom_description", "") or ""),
         prompt_template=(state.get("workspace") or {}).get("prompt_template"),
+        latest_user_request=latest_user_request,
+        control_image=control_image if isinstance(control_image, dict) else None,
+        annotated_image=annotated_image if isinstance(annotated_image, dict) else None,
+        prompt_language=prompt_language,
     )
     workspace = _build_prompt_draft(
         design_state=design_state,
         reference_images=reference_images,
         control_image=control_image if isinstance(control_image, dict) else None,
         custom_description=str((state.get("workspace") or {}).get("custom_description", "") or ""),
-        user_prompt_hint=str((state.get("workspace") or {}).get("llm_description", "") or ""),
-        llm_reply_hint=enhanced.prompt,
         negative_prompt=enhanced.negative_prompt,
         prompt_template=(state.get("workspace") or {}).get("prompt_template"),
     )
     emitter = get_current_emitter()
     if emitter is not None:
-        workspace["llm_description"] = enhanced.prompt
         workspace["negative_prompt"] = enhanced.negative_prompt
         await emitter.emit("prompt_update", {
             **workspace,
@@ -618,6 +664,11 @@ async def enhance_prompt_node(state: AgentState) -> dict:
         input={
             "design_state": design_state,
             "reference_image_count": len(reference_images),
+            "has_latest_user_request": bool(latest_user_request),
+            "has_control_image": isinstance(control_image, dict),
+            "has_annotated_image": isinstance(annotated_image, dict),
+            "prompt_language": prompt_language,
+            "image_model": image_model,
         },
         output=enhanced.model_dump(),
     )
@@ -773,6 +824,10 @@ async def refine_prompt_node(state: AgentState) -> dict:
     """Refine the prompt based on evaluation feedback."""
     enhanced_prompt: EnhancedPrompt | None = state.get("_enhanced_prompt")
     evaluation: EvaluationResult | None = state.get("last_evaluation")
+    gen_result = state.get("_current_gen_result") or {}
+    failed_image_url = gen_result.get("image_url") if isinstance(gen_result, dict) else None
+    image_model = str(dashboard_service.get_config().get("image_provider", {}).get("model", "") or "")
+    prompt_language = resolve_prompt_language(image_model)
 
     if enhanced_prompt is None or evaluation is None:
         update_current_span(output={"skipped": True, "reason": "missing prompt or evaluation"})
@@ -782,26 +837,28 @@ async def refine_prompt_node(state: AgentState) -> dict:
         input={
             "original_prompt": enhanced_prompt.model_dump(),
             "evaluation": evaluation,
+            "failed_image_url": failed_image_url,
+            "prompt_language": prompt_language,
+            "image_model": image_model,
             "retry_count": state.get("retry_count", 0),
         }
     )
     refined = await refine_prompt(
         original_prompt=enhanced_prompt,
         evaluation=evaluation,
+        failed_image_url=failed_image_url,
+        prompt_language=prompt_language,
     )
     workspace = _build_prompt_draft(
         design_state=dict(state.get("design_state") or {}),
         reference_images=list(state.get("reference_images") or []),
         control_image=state.get("control_image") if isinstance(state.get("control_image"), dict) else None,
         custom_description=str((state.get("workspace") or {}).get("custom_description", "") or ""),
-        user_prompt_hint=str((state.get("workspace") or {}).get("llm_description", "") or ""),
-        llm_reply_hint=refined.prompt,
         negative_prompt=refined.negative_prompt,
         prompt_template=(state.get("workspace") or {}).get("prompt_template"),
     )
     emitter = get_current_emitter()
     if emitter is not None:
-        workspace["llm_description"] = refined.prompt
         workspace["negative_prompt"] = refined.negative_prompt
         await emitter.emit("prompt_update", {
             **workspace,
@@ -830,7 +887,10 @@ def route_after_evaluate(state: AgentState) -> Literal["refine_prompt", END]:  #
     eval_result = state.get("last_evaluation")
     retry_count = state.get("retry_count", 0)
 
-    if eval_result is not None and eval_result["score"] < 0.8 and retry_count < 3:
+    if eval_result is None or retry_count >= 3:
+        return END
+    has_fatal_issue = bool(eval_result.get("fatal_issues"))
+    if (has_fatal_issue or eval_result["score"] < 0.72) and retry_count < 3:
         return "refine_prompt"
     return END
 

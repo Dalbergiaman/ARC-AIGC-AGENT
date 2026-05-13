@@ -27,11 +27,11 @@ def test_with_ref_includes_reference_score():
 
 def test_compute_weighted_score_no_ref_perfect():
     scores = _RawScores(
-        style_score=1.0,
-        material_score=1.0,
-        lighting_score=1.0,
+        overall_quality_score=1.0,
         composition_score=1.0,
-        quality_score=1.0,
+        color_lighting_score=1.0,
+        architectural_detail_score=1.0,
+        requirement_score=1.0,
         reference_score=None,
         feedback="perfect",
     )
@@ -41,11 +41,11 @@ def test_compute_weighted_score_no_ref_perfect():
 
 def test_compute_weighted_score_no_ref_zero():
     scores = _RawScores(
-        style_score=0.0,
-        material_score=0.0,
-        lighting_score=0.0,
+        overall_quality_score=0.0,
         composition_score=0.0,
-        quality_score=0.0,
+        color_lighting_score=0.0,
+        architectural_detail_score=0.0,
+        requirement_score=0.0,
         reference_score=None,
         feedback="zero",
     )
@@ -55,11 +55,11 @@ def test_compute_weighted_score_no_ref_zero():
 
 def test_compute_weighted_score_with_ref_perfect():
     scores = _RawScores(
-        style_score=1.0,
-        material_score=1.0,
-        lighting_score=1.0,
+        overall_quality_score=1.0,
         composition_score=1.0,
-        quality_score=1.0,
+        color_lighting_score=1.0,
+        architectural_detail_score=1.0,
+        requirement_score=1.0,
         reference_score=1.0,
         feedback="perfect",
     )
@@ -68,31 +68,47 @@ def test_compute_weighted_score_with_ref_perfect():
 
 
 def test_compute_weighted_score_precision():
-    # style=0.8 (30%), material=0.6 (20%), lighting=0.7 (20%),
-    # composition=0.9 (15%), quality=0.5 (15%) → no ref
+    # overall=0.8 (35%), composition=0.6 (20%), color=0.7 (15%),
+    # detail=0.9 (15%), requirement=0.5 (15%) → no ref
     scores = _RawScores(
-        style_score=0.8,
-        material_score=0.6,
-        lighting_score=0.7,
-        composition_score=0.9,
-        quality_score=0.5,
+        overall_quality_score=0.8,
+        composition_score=0.6,
+        color_lighting_score=0.7,
+        architectural_detail_score=0.9,
+        requirement_score=0.5,
         reference_score=None,
         feedback="test",
     )
-    expected = 0.8 * 0.30 + 0.6 * 0.20 + 0.7 * 0.20 + 0.9 * 0.15 + 0.5 * 0.15
+    expected = 0.8 * 0.35 + 0.6 * 0.20 + 0.7 * 0.15 + 0.9 * 0.15 + 0.5 * 0.15
     result = _compute_weighted_score(scores, has_reference=False)
     assert abs(result - expected) < 1e-4
 
 
 def test_score_clamped_to_range():
     scores = _RawScores(
-        style_score=1.5,    # over 1.0, should be clamped
-        material_score=-0.1, # under 0.0, should be clamped
-        lighting_score=0.5,
+        overall_quality_score=1.5,    # over 1.0, should be clamped
         composition_score=0.5,
-        quality_score=0.5,
+        color_lighting_score=-0.1,    # under 0.0, should be clamped
+        architectural_detail_score=0.5,
+        requirement_score=0.5,
         reference_score=None,
         feedback="clamp test",
     )
-    assert scores.style_score == 1.0
-    assert scores.material_score == 0.0
+    assert scores.overall_quality_score == 1.0
+    assert scores.color_lighting_score == 0.0
+
+
+def test_raw_scores_accept_fatal_issues_and_improvement_focus():
+    scores = _RawScores(
+        overall_quality_score=0.3,
+        composition_score=0.5,
+        color_lighting_score=0.6,
+        architectural_detail_score=0.4,
+        requirement_score=0.7,
+        reference_score=None,
+        fatal_issues=["透视明显错误"],
+        improvement_focus="先修正建筑透视和结构可信度",
+        feedback="透视错误导致第一眼质量差",
+    )
+    assert scores.has_fatal_issue is True
+    assert scores.improvement_focus == "先修正建筑透视和结构可信度"

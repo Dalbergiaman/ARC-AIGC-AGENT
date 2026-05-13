@@ -24,20 +24,20 @@ _llm = LLMClient()
 # ---------------------------------------------------------------------------
 
 _WEIGHTS_NO_REF = {
-    "style_score":       0.30,
-    "material_score":    0.20,
-    "lighting_score":    0.20,
-    "composition_score": 0.15,
-    "quality_score":     0.15,
+    "overall_quality_score":        0.35,
+    "composition_score":            0.20,
+    "color_lighting_score":         0.15,
+    "architectural_detail_score":   0.15,
+    "requirement_score":            0.15,
 }
 
 _WEIGHTS_WITH_REF = {
-    "style_score":       0.25,
-    "material_score":    0.15,
-    "lighting_score":    0.15,
-    "composition_score": 0.10,
-    "quality_score":     0.10,
-    "reference_score":   0.25,
+    "overall_quality_score":        0.30,
+    "composition_score":            0.17,
+    "color_lighting_score":         0.13,
+    "architectural_detail_score":   0.13,
+    "requirement_score":            0.12,
+    "reference_score":              0.15,
 }
 
 
@@ -46,21 +46,29 @@ _WEIGHTS_WITH_REF = {
 # ---------------------------------------------------------------------------
 
 class _RawScores(BaseModel):
-    style_score: float
-    material_score: float
-    lighting_score: float
+    overall_quality_score: float
     composition_score: float
-    quality_score: float
+    color_lighting_score: float
+    architectural_detail_score: float
+    requirement_score: float
     reference_score: float | None = None
+    fatal_issues: list[str] = []
+    improvement_focus: str = ""
     feedback: str
 
     @field_validator(
-        "style_score", "material_score", "lighting_score",
-        "composition_score", "quality_score", mode="before"
+        "overall_quality_score", "composition_score", "color_lighting_score",
+        "architectural_detail_score", "requirement_score", "reference_score", mode="before"
     )
     @classmethod
-    def clamp(cls, v: float) -> float:
+    def clamp(cls, v: float | None) -> float | None:
+        if v is None:
+            return None
         return max(0.0, min(1.0, float(v)))
+
+    @property
+    def has_fatal_issue(self) -> bool:
+        return bool(self.fatal_issues)
 
 
 def _compute_weighted_score(raw: _RawScores, has_reference: bool) -> float:
@@ -118,7 +126,7 @@ async def evaluate_generated_image(
         )),
     ]
 
-    raw = await _llm.ainvoke(messages, images=images)
+    raw = await _llm.ainvoke(messages, images=images, enable_thinking=False)
     update_current_generation(
         input={
             "image_url": image_url,
@@ -136,19 +144,21 @@ async def evaluate_generated_image(
         messages.append(HumanMessage(
             content="请严格按照 JSON 格式输出各维度分数，不要包含其他内容。"
         ))
-        raw2 = await _llm.ainvoke(messages, images=images)
+        raw2 = await _llm.ainvoke(messages, images=images, enable_thinking=False)
         update_current_generation(output=message_preview(raw2), metadata={"attempt": 2})
         try:
             scores = _parse_scores(raw2)
         except (json.JSONDecodeError, ValidationError, KeyError):
             # Fallback: neutral scores so the graph can continue
             scores = _RawScores(
-                style_score=0.5,
-                material_score=0.5,
-                lighting_score=0.5,
+                overall_quality_score=0.5,
                 composition_score=0.5,
-                quality_score=0.5,
+                color_lighting_score=0.5,
+                architectural_detail_score=0.5,
+                requirement_score=0.5,
                 reference_score=0.5 if has_reference else None,
+                fatal_issues=["评估解析失败"],
+                improvement_focus="人工检查生成结果",
                 feedback="评估解析失败，建议人工检查生成结果",
             )
             update_current_generation(
@@ -161,13 +171,20 @@ async def evaluate_generated_image(
 
     result: EvaluationResult = {
         "score": weighted_score,
-        "style_score": scores.style_score,
-        "material_score": scores.material_score,
-        "lighting_score": scores.lighting_score,
+        "overall_quality_score": scores.overall_quality_score,
         "composition_score": scores.composition_score,
-        "quality_score": scores.quality_score,
+        "color_lighting_score": scores.color_lighting_score,
+        "architectural_detail_score": scores.architectural_detail_score,
+        "requirement_score": scores.requirement_score,
         "reference_score": scores.reference_score,
+        "fatal_issues": scores.fatal_issues,
+        "improvement_focus": scores.improvement_focus,
         "feedback": scores.feedback,
+        # Legacy compatibility for existing downstream prompt code and persisted rows.
+        "style_score": scores.requirement_score,
+        "material_score": scores.architectural_detail_score,
+        "lighting_score": scores.color_lighting_score,
+        "quality_score": scores.overall_quality_score,
     }
     update_current_generation(output=result, metadata={"parse_ok": True, "score": weighted_score})
     return result
@@ -202,12 +219,14 @@ if __name__ == "__main__":
         )
         print("\n=== 评估结果（无参考图）===")
         print(f"综合得分:   {result['score']:.4f}")
-        print(f"风格符合度: {result['style_score']:.2f}")
-        print(f"材质还原度: {result['material_score']:.2f}")
-        print(f"光线与氛围: {result['lighting_score']:.2f}")
+        print(f"第一眼质量: {result['overall_quality_score']:.2f}")
         print(f"构图与视角: {result['composition_score']:.2f}")
-        print(f"整体质量:   {result['quality_score']:.2f}")
+        print(f"色彩与光影: {result['color_lighting_score']:.2f}")
+        print(f"建筑细节:   {result['architectural_detail_score']:.2f}")
+        print(f"需求符合度: {result['requirement_score']:.2f}")
         print(f"参考图相似度: {result['reference_score']}")
+        print(f"严重问题:   {result['fatal_issues']}")
+        print(f"修正重点:   {result['improvement_focus']}")
         print(f"改进建议:   {result['feedback']}")
 
     asyncio.run(main())

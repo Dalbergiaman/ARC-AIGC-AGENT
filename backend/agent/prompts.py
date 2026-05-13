@@ -179,21 +179,62 @@ def enhance_prompt_system(
     llm_description: str = "",
     custom_description: str = "",
     prompt_template: dict | None = None,
+    latest_user_request: str = "",
+    control_image: dict | None = None,
+    annotated_image: dict | None = None,
+    prompt_language: str = "zh",
 ) -> str:
     ds = design_state
+    use_english = prompt_language == "en"
+    prompt_desc = "英文正向提示词，220词以内，从最重要的特征开始，逗号分隔" if use_english else "中文正向提示词，260字以内，从最重要的特征开始，逗号分隔"
+    negative_desc = "英文负向提示词，排除不想要的元素，逗号分隔" if use_english else "中文负向提示词，排除不想要的元素，逗号分隔；通用质量负向词可保留英文关键词"
+    language_rule = (
+        "prompt 必须是英文，从建筑类型和风格开始，依次加入材质、光线、视角、环境"
+        if use_english
+        else "prompt 必须是中文，直接保留用户原话中的具体位置、数量、材质、颜色、禁止项和修改动作；少用翻译腔英文关键词"
+    )
 
     ref_section = ""
     if reference_analysis:
-        descs = [r.get("description", "") for r in reference_analysis if r.get("description")]
+        descs = []
+        for r in reference_analysis:
+            desc = r.get("description", "")
+            if not desc:
+                continue
+            intent = r.get("reference_intent", "")
+            note = r.get("intent_note", "")
+            suffix = "；".join(filter(None, [
+                f"参考意图：{intent}" if intent else "",
+                f"用户说明：{note}" if note else "",
+            ]))
+            descs.append(f"{desc}（{suffix}）" if suffix else desc)
         if descs:
             ref_section = "【参考图特征】\n" + "\n".join(f"  - {d}" for d in descs)
 
+    image_edit_section = ""
+    image_edit_lines = []
+    if control_image:
+        note = str(control_image.get("note", "") or "").strip()
+        image_edit_lines.append(
+            "  - 图生图底图：作为建筑体量、透视、空间关系、立面分区、开窗和主要材质的编辑基准；如果用户明确要求调整这些基准，则以用户最新要求为优先。"
+            + (f"用户说明：{note}" if note else "")
+        )
+    if annotated_image:
+        note = str(annotated_image.get("note", "") or "").strip()
+        image_edit_lines.append(
+            "  - 带批注效果图：这是上一版结果的修改稿，必须把批注说明转成明确的编辑指令。"
+            + (f"批注说明：{note}" if note else "")
+        )
+    if image_edit_lines:
+        image_edit_section = "【图生图编辑上下文】\n" + "\n".join(image_edit_lines)
+
     description_section = ""
-    if llm_description or custom_description:
+    if llm_description or custom_description or latest_user_request:
         description_section = (
             "【描述性提示词】\n"
             f"模型整理描述：{llm_description or '无'}\n"
-            f"用户自定义描述：{custom_description or '无'}"
+            f"用户自定义描述：{custom_description or '无'}\n"
+            f"用户最新原始要求：{latest_user_request or '无'}"
         )
 
     template_section = ""
@@ -220,6 +261,7 @@ def enhance_prompt_system(
 - 特殊需求: {ds.get('special_requirements', '')}
 
 {ref_section}
+{image_edit_section}
 {description_section}
 {template_section}
 
@@ -227,18 +269,19 @@ def enhance_prompt_system(
 
 ```json
 {{
-  "prompt": "英文正向提示词，150词以内，从最重要的特征开始，逗号分隔",
-  "negative_prompt": "英文负向提示词，排除不想要的元素，逗号分隔"
+  "prompt": "{prompt_desc}",
+  "negative_prompt": "{negative_desc}"
 }}
 ```
 
 要求:
-- prompt 必须是英文，从建筑类型和风格开始，依次加入材质、光线、视角、环境
-- 如果用户提供了图生图底图，请明确要求保留底图的建筑体量、透视关系、空间尺度和主要构图，只改变用户要求调整的风格、材质、光线或氛围
-- 将"模型整理描述"和"用户自定义描述"融合进 prompt，不要只输出关键词
+- {language_rule}
+- 如果存在"图生图编辑上下文"，prompt 必须写成 edit/redesign 指令，明确哪些建筑要素需要保留、哪些局部需要修改；不得把输入图只当作普通风格参考
+- 必须保留"用户最新原始要求"中的具体对象、位置、数量、方向、材质、颜色、禁止项和修改动作；不要概括成泛化风格词
+- 将"模型整理描述"、"用户自定义描述"和"用户最新原始要求"融合进 prompt，不要只输出关键词
 - 仅当存在"用户选择的风格模板"时，才将其作为风格上下文融入 prompt；用户未选模板时，按设计参数中的风格字段自然描述即可，不要套用任何模板关键词库
-- 融入参考图特征的有效表达方式
-- negative_prompt 包含通用质量负向词（blurry, distorted, watermark）和风格冲突词
+- 融入参考图特征时遵循参考意图和用户说明，不要把色彩参考误写成体量约束
+- negative_prompt 包含通用质量负向词（blurry, distorted, watermark）和风格冲突词；若 prompt 为中文，negative_prompt 仍可混用这些英文质量词
 - 不要在 prompt 中重复相同概念"""
 
 
@@ -250,14 +293,14 @@ def evaluate_image_system(
 
     if has_reference:
         weights = (
-            "风格符合度 25%、材质还原度 15%、光线与氛围 15%、"
-            "构图与视角 10%、整体质量 10%、参考图相似度 25%"
+            "第一眼整体质量 30%、构图与视角 17%、色彩与光影 13%、"
+            "建筑细节可信度 13%、需求符合度 12%、参考一致性 15%"
         )
-        ref_note = "由于有参考图，请额外评估生成图与参考图在构图、色调、风格上的整体相似程度。"
+        ref_note = "由于有参考图，请按用户标注意图理解参考图；只评估它应该影响的方面，不要把风格参考误判成体量约束。"
     else:
         weights = (
-            "风格符合度 30%、材质还原度 20%、光线与氛围 20%、"
-            "构图与视角 15%、整体质量 15%"
+            "第一眼整体质量 35%、构图与视角 20%、色彩与光影 15%、"
+            "建筑细节可信度 15%、需求符合度 15%"
         )
         ref_note = "本次无参考图，不评估参考图相似度维度。"
 
@@ -270,10 +313,26 @@ def evaluate_image_system(
 - 光线: {ds.get('lighting', '')}
 - 视角: {ds.get('viewpoint', '')}
 
-## 评分维度与权重
+## 评分维度与权重（后端会按这些维度加权）
 {weights}
 
 {ref_note}
+
+## 先做第一眼判断
+先用建筑效果图评审的直觉判断：这张图是否像一张稳定、可信、完成度高的建筑效果图。以下属于严重问题，应显著拉低 overall_quality_score，并写入 fatal_issues：
+- 透视、尺度、体量或空间关系明显不合理
+- 建筑结构错误、窗洞/门洞/楼梯/栏杆/屋顶等出现畸变、漂浮、断裂、重复错乱
+- 出现与需求无关的错误内容、文字、水印、人物/车辆喧宾夺主、奇怪物体
+- 大面积画面单调、空洞、糊成一片，缺少建筑表达重点
+- 图生图任务中主体建筑被随机重构，或上一版正确内容被破坏
+
+## 细分维度说明
+- overall_quality_score：第一眼画面完成度和可信度，包括透视、结构、清晰度、是否有明显错误内容和大面积单调问题；这是最重要维度
+- composition_score：构图、视角、主体位置、画面层次、留白、前中后景关系，是否服务建筑表达
+- color_lighting_score：色彩搭配、材质色关系、光线方向、明暗层次、氛围是否协调
+- architectural_detail_score：立面分区、开窗节奏、材质细节、入口/屋顶/檐口/栏杆等建筑节点是否可信且精致
+- requirement_score：是否符合用户指定的建筑类型、风格、材质、视角、修改动作和禁止项
+- reference_score：有参考图时，按参考图意图评估相似度；无参考图时必须为 null
 
 ## 评分标准
 - 0.9~1.0：完全符合，几乎无瑕疵
@@ -286,42 +345,61 @@ def evaluate_image_system(
 ```json
 {{
   "score": 0.0,
-  "style_score": 0.0,
-  "material_score": 0.0,
-  "lighting_score": 0.0,
+  "overall_quality_score": 0.0,
   "composition_score": 0.0,
-  "quality_score": 0.0,
+  "color_lighting_score": 0.0,
+  "architectural_detail_score": 0.0,
+  "requirement_score": 0.0,
   "reference_score": null,
-  "feedback": "一句话改进建议，指出最需要改进的一个方面"
+  "fatal_issues": ["若无严重问题则为空数组"],
+  "improvement_focus": "下一轮最应该优先修正的方向，必须具体",
+  "feedback": "1-2句话，先说第一眼最大问题，再说最有效的修正方向"
 }}
 ```
 
 要求：
-- score 为各维度加权总分，精确到小数点后两位
+- score 字段会被后端重算，你仍需填 0.0 占位
 - reference_score 无参考图时必须为 null
-- feedback 聚焦最影响分数的单一问题，供下一轮提示词修正使用"""
+- 不要因为需求字段匹配就给高分；如果第一眼画面差、透视怪、结构错或大面积单调，overall_quality_score 必须低
+- feedback 不要建议随机换风格；优先修复画面质量、结构可信度、构图和明确需求偏差"""
 
 
 def refine_prompt_system(
     original_prompt: str,
     evaluation: EvaluationResult,
+    has_failed_image: bool = False,
+    prompt_language: str = "zh",
 ) -> str:
     score = evaluation.get("score", 0)
     feedback = evaluation.get("feedback", "")
+    prompt_desc = "修正后的英文正向提示词" if prompt_language == "en" else "修正后的中文正向提示词"
+    negative_desc = "修正后的英文负向提示词" if prompt_language == "en" else "修正后的中文负向提示词；通用质量负向词可保留英文关键词"
 
-    # 找出分数最低的维度，给出针对性修正方向
+    # 找出分数最低的维度，给出针对性修正方向。兼容旧评估 payload。
     dim_scores = {
-        "风格符合度": evaluation.get("style_score", 1.0),
-        "材质还原度": evaluation.get("material_score", 1.0),
-        "光线与氛围": evaluation.get("lighting_score", 1.0),
+        "第一眼整体质量": evaluation.get("overall_quality_score", evaluation.get("quality_score", 1.0)),
         "构图与视角": evaluation.get("composition_score", 1.0),
-        "整体质量": evaluation.get("quality_score", 1.0),
+        "色彩与光影": evaluation.get("color_lighting_score", evaluation.get("lighting_score", 1.0)),
+        "建筑细节可信度": evaluation.get("architectural_detail_score", evaluation.get("material_score", 1.0)),
+        "需求符合度": evaluation.get("requirement_score", evaluation.get("style_score", 1.0)),
     }
     if evaluation.get("reference_score") is not None:
-        dim_scores["参考图相似度"] = evaluation["reference_score"]
+        dim_scores["参考一致性"] = evaluation["reference_score"]
 
     weakest = min(dim_scores, key=dim_scores.get)
     weakest_score = dim_scores[weakest]
+    fatal_issues = evaluation.get("fatal_issues") or []
+    improvement_focus = evaluation.get("improvement_focus", "")
+    image_section = ""
+    if has_failed_image:
+        image_section = """
+## 失败图像
+用户消息中提供的第一张图是上一轮低分生成结果。你必须结合这张图判断问题：
+- 哪些内容已经正确，应该保留
+- 哪些内容与原始提示词或评估反馈不一致
+- 如果是图生图任务，重点检查体量、透视、窗户、构图是否被破坏
+- 修正 prompt 时要针对图中的具体失败点，不要只机械增加泛化质量词
+"""
 
     return f"""你是一位专业的建筑效果图提示词工程师，请根据评估反馈修正提示词。
 

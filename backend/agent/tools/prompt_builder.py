@@ -11,7 +11,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ValidationError
 
 from agent.prompts import enhance_prompt_system, refine_prompt_system
-from agent.state import DesignState, EvaluationResult, ReferenceImageAnalysis
+from agent.state import AnnotatedImage, ControlImage, DesignState, EvaluationResult, ReferenceImageAnalysis
+from agent.tools.image_analysis import _to_data_url
 from core.llm.client import LLMClient
 from core.observability import message_preview, observe, update_current_generation
 
@@ -21,6 +22,14 @@ _llm = LLMClient()
 class EnhancedPrompt(BaseModel):
     prompt: str
     negative_prompt: str
+
+
+def resolve_prompt_language(image_model: str | None = None) -> str:
+    """Default to Chinese prompts; keep English for models known to prefer it."""
+    model = (image_model or "").lower()
+    if "nano-banana" in model:
+        return "en"
+    return "zh"
 
 
 def _parse_prompt_response(raw: str) -> EnhancedPrompt:
@@ -42,6 +51,10 @@ async def enhance_prompt(
     llm_description: str = "",
     custom_description: str = "",
     prompt_template: dict | None = None,
+    latest_user_request: str = "",
+    control_image: ControlImage | None = None,
+    annotated_image: AnnotatedImage | None = None,
+    prompt_language: str = "zh",
 ) -> EnhancedPrompt:
     """Build image generation prompt from DesignState and reference images.
 
@@ -54,16 +67,24 @@ async def enhance_prompt(
             llm_description=llm_description,
             custom_description=custom_description,
             prompt_template=prompt_template,
+            latest_user_request=latest_user_request,
+            control_image=control_image,
+            annotated_image=annotated_image,
+            prompt_language=prompt_language,
         )),
         HumanMessage(content="请根据以上设计参数生成提示词。"),
     ]
 
-    raw = await _llm.ainvoke(messages)
+    raw = await _llm.ainvoke(messages, enable_thinking=False)
     update_current_generation(
         input={
             "design_state": design_state,
             "reference_image_count": len(reference_analysis or []),
             "has_prompt_template": bool(prompt_template),
+            "has_latest_user_request": bool(latest_user_request),
+            "has_control_image": bool(control_image),
+            "has_annotated_image": bool(annotated_image),
+            "prompt_language": prompt_language,
         },
         output=message_preview(raw),
         metadata={"attempt": 1},
@@ -76,7 +97,7 @@ async def enhance_prompt(
     except (json.JSONDecodeError, ValidationError, KeyError):
         # Retry once with an explicit reminder
         messages.append(HumanMessage(content="请严格按照 JSON 格式输出，只包含 prompt 和 negative_prompt 两个字段。"))
-        raw2 = await _llm.ainvoke(messages)
+        raw2 = await _llm.ainvoke(messages, enable_thinking=False)
         update_current_generation(output=message_preview(raw2), metadata={"attempt": 2})
         try:
             parsed = _parse_prompt_response(raw2)
@@ -109,24 +130,36 @@ async def enhance_prompt(
 async def refine_prompt(
     original_prompt: EnhancedPrompt,
     evaluation: EvaluationResult,
+    failed_image_url: str | None = None,
+    prompt_language: str = "zh",
 ) -> EnhancedPrompt:
-    """Refine prompt based on evaluation feedback.
+    """Refine prompt based on evaluation feedback and the failed image.
 
-    Called by refine_prompt_node when score < 0.8 and retry_count < 3.
+    Called by refine_prompt_node when automatic retry policy decides the image needs repair.
     """
+    images = [_to_data_url(failed_image_url)] if failed_image_url else None
     messages = [
         SystemMessage(content=refine_prompt_system(
             original_prompt=original_prompt.prompt,
             evaluation=evaluation,
+            has_failed_image=bool(failed_image_url),
+            prompt_language=prompt_language,
         )),
-        HumanMessage(content="请根据评估反馈修正提示词。"),
+        HumanMessage(content=(
+            "请根据评估反馈和失败图像修正提示词。第一张图是刚才低分的生成结果。"
+            if failed_image_url
+            else "请根据评估反馈修正提示词。"
+        )),
     ]
 
-    raw = await _llm.ainvoke(messages)
+    raw = await _llm.ainvoke(messages, images=images)
     update_current_generation(
         input={
             "original_prompt": original_prompt.model_dump(),
             "evaluation": evaluation,
+            "failed_image_url": failed_image_url,
+            "has_failed_image": bool(failed_image_url),
+            "prompt_language": prompt_language,
         },
         output=message_preview(raw),
         metadata={"attempt": 1},
