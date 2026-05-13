@@ -3,7 +3,12 @@ import time
 
 import httpx
 
-from core.image.base import GenerationRequest, GenerationResult, ImageGeneratorBase
+from core.image.base import (
+    GenerationRequest,
+    GenerationResult,
+    ImageGeneratorBase,
+    append_negative_prompt_to_prompt,
+)
 
 
 class BailianClient(ImageGeneratorBase):
@@ -24,7 +29,8 @@ class BailianClient(ImageGeneratorBase):
             url for url in [request.control_image_url or request.ref_image_url] if url
         ]
         content = [{"image": url} for url in image_urls]
-        content.append({"text": request.prompt})
+        prompt = append_negative_prompt_to_prompt(request.prompt, request.negative_prompt)
+        content.append({"text": prompt})
 
         payload = {
             "model": self._model,

@@ -1,7 +1,12 @@
 import time
 import httpx
 import json
-from core.image.base import GenerationRequest, GenerationResult, ImageGeneratorBase
+from core.image.base import (
+    GenerationRequest,
+    GenerationResult,
+    ImageGeneratorBase,
+    append_negative_prompt_to_prompt,
+)
 
 
 def _parse_grsai_response(text: str) -> dict:
@@ -46,10 +51,11 @@ class GrsaiClient(ImageGeneratorBase):
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
+        prompt = append_negative_prompt_to_prompt(request.prompt, request.negative_prompt)
         if "gpt-image" in self._model:
             payload = {
                 "model": self._model,
-                "prompt": request.prompt,
+                "prompt": prompt,
                 "aspectRatio": "1:1",
                 "quality": "auto",
                 "shutProgress": True
@@ -57,7 +63,7 @@ class GrsaiClient(ImageGeneratorBase):
         elif "nano-banana" in self._model:
             payload = {
                 "model": self._model,
-                "prompt": request.prompt,
+                "prompt": prompt,
                 "aspectRatio": "auto",
                 "imageSize": "2k",
                 "shutProgress": True

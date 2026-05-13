@@ -29,3 +29,11 @@ class ImageGeneratorBase(ABC):
     @abstractmethod
     async def generate(self, request: GenerationRequest) -> GenerationResult:
         ...
+
+
+def append_negative_prompt_to_prompt(prompt: str, negative_prompt: str | None) -> str:
+    """Fold negative constraints into prompt for providers without a native field."""
+    negative = (negative_prompt or "").strip()
+    if not negative:
+        return prompt
+    return f"{prompt.strip()}\n\n避免出现以下问题：{negative}"

@@ -14,13 +14,13 @@ class TestImageGeneratorFactory(unittest.TestCase):
 
     def test_volcengine_instantiates(self):
         client = ImageGeneratorFactory.create(
-            "volcengine", api_key="test", model="doubao-seedream-3-0-t2i-250415"
+            "volcengine", api_key="test", model="doubao-seedream-5-0-260128"
         )
         self.assertIsInstance(client, VolcengineClient)
 
     def test_grsai_instantiates(self):
         client = ImageGeneratorFactory.create(
-            "grsai", api_key="test", model="gpt-image"
+            "grsai", api_key="test", model="gpt-image-2"
         )
         self.assertIsInstance(client, GrsaiClient)
 

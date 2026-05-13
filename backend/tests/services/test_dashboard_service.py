@@ -82,7 +82,7 @@ def test_write_then_read_consistent(tmp_path):
     dashboard_service.CONFIG_PATH = config_path
 
     patch = {
-        "image_provider": {"provider": "grsai", "model": "gpt-image-1", "api_key": "grsai-key"},
+        "image_provider": {"provider": "grsai", "model": "gpt-image-2", "api_key": "grsai-key"},
         "embedding": {"provider": "volcengine", "api_key": "embedding-key"},
         "langfuse": {"host": "http://localhost:3100"},
     }
@@ -96,12 +96,58 @@ def test_write_then_read_consistent(tmp_path):
     assert read_back == written
 
 
+def test_get_config_normalizes_legacy_image_model(tmp_path):
+    config_path = tmp_path / "dashboard.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {"image_provider": {"provider": "grsai", "model": "gpt-image-1", "api_key": "key"}},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    original = dashboard_service.CONFIG_PATH
+    dashboard_service.CONFIG_PATH = config_path
+    try:
+        config = dashboard_service.get_config()
+    finally:
+        dashboard_service.CONFIG_PATH = original
+
+    assert config["image_provider"]["provider"] == "grsai"
+    assert config["image_provider"]["model"] == "gpt-image-2"
+    assert config["image_provider"]["api_key"] == "key"
+
+
+def test_update_config_normalizes_legacy_image_model_before_writing(tmp_path):
+    config_path = tmp_path / "dashboard.yaml"
+    original = dashboard_service.CONFIG_PATH
+    dashboard_service.CONFIG_PATH = config_path
+    try:
+        written = dashboard_service.update_config(
+            {"image_provider": {"provider": "volcengine", "model": "doubao-seedream-3-0-t2i-250415"}}
+        )
+        read_back = dashboard_service.get_config()
+    finally:
+        dashboard_service.CONFIG_PATH = original
+
+    assert written["image_provider"]["provider"] == "volcengine"
+    assert written["image_provider"]["model"] == "doubao-seedream-5-0-260128"
+    assert read_back["image_provider"]["model"] == "doubao-seedream-5-0-260128"
+
+
 def test_get_providers_matches_supported_clients():
     providers = dashboard_service.get_providers()
 
     image_provider_ids = {item["id"] for item in providers["image_provider"]}
     assert image_provider_ids == {"bailian", "volcengine", "grsai"}
     assert "openrouter" not in image_provider_ids
+    image_models = {item["id"]: item["models"] for item in providers["image_provider"]}
+    assert image_models["bailian"] == ["wan2.7-image-pro"]
+    assert image_models["volcengine"] == [
+        "doubao-seedream-5-0-260128",
+        "doubao-seedream-4-5-251128",
+    ]
+    assert image_models["grsai"] == ["gpt-image-2", "nano-banana-pro"]
 
     embedding_provider_ids = {item["id"] for item in providers["embedding"]}
     assert embedding_provider_ids == {"volcengine"}

@@ -8,10 +8,10 @@ from agent.tools.prompt_builder import EnhancedPrompt, enhance_prompt, refine_pr
 
 
 def test_resolve_prompt_language_defaults_to_chinese_except_nano_banana() -> None:
-    assert resolve_prompt_language("wanx2.1-t2i-turbo") == "zh"
-    assert resolve_prompt_language("doubao-seedream-3-0-t2i-250415") == "zh"
-    assert resolve_prompt_language("gpt-image-1") == "zh"
-    assert resolve_prompt_language("nano-banana") == "en"
+    assert resolve_prompt_language("wan2.7-image-pro") == "zh"
+    assert resolve_prompt_language("doubao-seedream-5-0-260128") == "zh"
+    assert resolve_prompt_language("gpt-image-2") == "zh"
+    assert resolve_prompt_language("nano-banana-pro") == "en"
 
 
 @pytest.mark.anyio
@@ -105,6 +105,12 @@ async def test_enhance_prompt_keeps_img2img_edit_context() -> None:
     assert "只参考木材质" in captured["system"]
     assert "中文正向提示词" in captured["system"]
     assert "prompt 必须是中文" in captured["system"]
+    assert "固定品质护栏" in captured["system"]
+    assert "专业效果图公司品质" in captured["system"]
+    assert "摄影级画面品质" in captured["system"]
+    assert "电影级光线" in captured["system"]
+    assert "建筑结构合理" in captured["system"]
+    assert "建筑变形" in captured["system"]
 
 
 @pytest.mark.anyio

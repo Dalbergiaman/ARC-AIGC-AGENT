@@ -24,6 +24,7 @@ type ChatStore = {
   setStreamState: (state: StreamState) => void;
   setToolStatus: (status: ToolStatus | null) => void;
   appendAgentStatus: (status: Omit<AgentStatus, "id">) => void;
+  finishRunningAgentStatuses: () => void;
   upsertGenerationPreview: (preview: GenerationPreview) => void;
   setGenerationPreviews: (previews: GenerationPreview[]) => void;
   failRunningPreviews: () => void;
@@ -135,8 +136,30 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) => {
       if (!state.currentAssistantMessageId) return state;
       const current = state.agentStatusesByMessage[state.currentAssistantMessageId] ?? [];
+      const existingIndex = current.findIndex((item) => item.stage === status.stage);
+      if (existingIndex !== -1) {
+        const existing = current[existingIndex];
+        if (existing.status === status.status && existing.summary === status.summary) {
+          return state;
+        }
+        const next = [...current];
+        next[existingIndex] = {
+          ...existing,
+          ...status,
+        };
+        return {
+          agentStatusesByMessage: {
+            ...state.agentStatusesByMessage,
+            [state.currentAssistantMessageId]: next,
+          },
+        };
+      }
       const previous = current[current.length - 1];
-      if (previous?.stage === status.stage && previous.status === status.status && previous.summary === status.summary) {
+      if (
+        previous?.stage === status.stage &&
+        previous.status === status.status &&
+        previous.summary === status.summary
+      ) {
         return state;
       }
       return {
@@ -149,6 +172,22 @@ export const useChatStore = create<ChatStore>((set) => ({
               id: `${status.stage}-${status.status}-${current.length}`,
             },
           ],
+        },
+      };
+    }),
+  finishRunningAgentStatuses: () =>
+    set((state) => {
+      if (!state.currentAssistantMessageId) return state;
+      const current = state.agentStatusesByMessage[state.currentAssistantMessageId] ?? [];
+      if (!current.some((item) => item.status === "running")) return state;
+      return {
+        agentStatusesByMessage: {
+          ...state.agentStatusesByMessage,
+          [state.currentAssistantMessageId]: current.map((item) =>
+            item.status === "running"
+              ? { ...item, status: "done" as const, summary: item.summary.replace(/^正在/, "已") }
+              : item,
+          ),
         },
       };
     }),

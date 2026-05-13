@@ -15,7 +15,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "image_provider": {
         "provider": "bailian",
-        "model": "wanx2.1-t2i-turbo",
+        "model": "wan2.7-image-pro",
         "api_key": "",
     },
     "embedding": {
@@ -43,16 +43,16 @@ PROVIDERS: dict[str, Any] = {
         },
     ],
     "image_provider": [
-        {"id": "bailian", "label": "Bailian", "models": ["wanx2.1-t2i-turbo"]},
+        {"id": "bailian", "label": "Bailian", "models": ["wan2.7-image-pro"]},
         {
             "id": "volcengine",
             "label": "Volcengine",
-            "models": ["doubao-seedream-3-0-t2i-250415"],
+            "models": ["doubao-seedream-5-0-260128", "doubao-seedream-4-5-251128"],
         },
         {
             "id": "grsai",
             "label": "GrsAI",
-            "models": ["gpt-image-1", "nano-banana"],
+            "models": ["gpt-image-2", "nano-banana-pro"],
         },
     ],
     "embedding": [
@@ -79,7 +79,28 @@ def _normalize_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     config = deepcopy(DEFAULT_CONFIG)
     if not isinstance(raw, dict):
         return config
-    return _deep_merge(config, raw)
+    config = _deep_merge(config, raw)
+    _normalize_image_provider_model(config)
+    return config
+
+
+def _normalize_image_provider_model(config: dict[str, Any]) -> None:
+    image_config = config.get("image_provider")
+    if not isinstance(image_config, dict):
+        return
+
+    provider_id = image_config.get("provider")
+    provider = next(
+        (item for item in PROVIDERS["image_provider"] if item["id"] == provider_id),
+        None,
+    )
+    if provider is None:
+        provider = PROVIDERS["image_provider"][0]
+        image_config["provider"] = provider["id"]
+
+    models = provider.get("models") or []
+    if models and image_config.get("model") not in models:
+        image_config["model"] = models[0]
 
 
 def get_config() -> dict[str, Any]:
@@ -95,6 +116,7 @@ def get_config() -> dict[str, Any]:
 def update_config(patch: dict[str, Any]) -> dict[str, Any]:
     current = get_config()
     updated = _deep_merge(current, patch)
+    _normalize_image_provider_model(updated)
 
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with CONFIG_PATH.open("w", encoding="utf-8") as file:

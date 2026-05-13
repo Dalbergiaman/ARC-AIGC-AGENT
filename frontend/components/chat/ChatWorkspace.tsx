@@ -67,6 +67,7 @@ export function ChatWorkspace({ sessionId }: Props) {
     setStreamState,
     setToolStatus,
     appendAgentStatus,
+    finishRunningAgentStatuses,
     upsertGenerationPreview,
     setGenerationPreviews,
     failRunningPreviews,
@@ -359,6 +360,7 @@ export function ChatWorkspace({ sessionId }: Props) {
       if (reply) {
         replaceAssistantText(reply);
       }
+      finishRunningAgentStatuses();
       failRunningPreviews();
       setStreamState("idle");
       finalizeAssistantMessage();
