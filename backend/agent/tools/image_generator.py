@@ -29,7 +29,42 @@ class NullEmitter:
 
 
 _POLL_INTERVAL = 2      # seconds between Redis result checks
-_TIMEOUT_SECONDS = 120  # max wait before treating as timeout
+_TIMEOUT_SECONDS = 240  # max wait before treating as timeout
+_MAX_REFERENCE_INPUT_IMAGES = 3
+
+
+def _reference_usage_rule(image: dict) -> str:
+    intent = str(image.get("reference_intent") or image.get("intent") or "").strip()
+    note = str(image.get("intent_note") or image.get("note") or "").strip()
+    rules = {
+        "composition": "只参考构图、视角和画面关系，不覆盖结构底图的建筑体量、透视和空间关系。",
+        "color": "只参考色彩关系、饱和度、冷暖倾向和明暗对比，不复制建筑形体。",
+        "style": "只参考建筑表达语言、立面气质和细部密度，不复制具体建筑体量。",
+        "material": "只参考材质肌理、玻璃反射、金属/石材/木材等质感，不参考构图和体量。",
+        "lighting": "只参考光线时段、方向、色温、阴影和氛围，不改变主体结构。",
+        "surroundings": "只参考环境关系、植被、水面、街景或场地氛围，不改变主体建筑形体。",
+        "other": "只按用户说明限定的方向参考，不覆盖结构底图和最新文字要求。",
+    }
+    rule = rules.get(intent) or "作为全图视觉参考，但不得覆盖结构底图的体量、透视和空间关系。"
+    if note:
+        rule += f"用户说明：{note}"
+    return rule
+
+
+def _reference_input_images(state: AgentState) -> list[dict]:
+    images: list[dict] = []
+    seen: set[str] = set()
+    for image in state.get("reference_images") or []:
+        if not isinstance(image, dict):
+            continue
+        url = str(image.get("image_url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        images.append(image)
+        if len(images) >= _MAX_REFERENCE_INPUT_IMAGES:
+            break
+    return images
 
 
 @observe(name="tool:generate_image", as_type="tool")
@@ -50,13 +85,14 @@ async def generate_image(
     session_id = state.get("turn_id", "")
     run_id = state.get("run_id", "")
 
-    # Build request dict for the Celery task. reference_images are semantic-only;
-    # control_image, annotated_image, rag_image, and failed_image are explicit
-    # img2img anchors sent to providers. Image numbers are assigned after empty
-    # slots are filtered so prompt labels always match provider input order.
+    # Build request dict for the Celery task. control_image is the strongest
+    # structure anchor; reference_images are visual evidence constrained by
+    # their user intent. Image numbers are assigned after empty slots are
+    # filtered so prompt labels always match provider input order.
     control_image = state.get("control_image") or {}
     annotated_image = state.get("annotated_image") or {}
     rag_image = state.get("rag_image") or {}
+    reference_images = _reference_input_images(state)
     current_gen_result = state.get("_current_gen_result") or {}
     control_url: str | None = control_image.get("image_url") if isinstance(control_image, dict) else None
     annotated_url: str | None = annotated_image.get("image_url") if isinstance(annotated_image, dict) else None
@@ -69,8 +105,11 @@ async def generate_image(
     prompt = enhanced_prompt.prompt
     input_image_urls: list[str] = []
     slot_labels: list[str] = []
+    fallback_input_image_urls: list[str] = []
+    fallback_slot_labels: list[str] = []
     if control_url:
         input_image_urls.append(control_url)
+        fallback_input_image_urls.append(control_url)
         control_note = str(control_image.get("note", "") or "").strip()
         line = (
             f"图{len(input_image_urls)}为图生图底图，是本次编辑的主约束图；"
@@ -82,8 +121,10 @@ async def generate_image(
         slot_labels.append(
             line
         )
+        fallback_slot_labels.append(line)
     if annotated_url:
         input_image_urls.append(annotated_url)
+        fallback_input_image_urls.append(annotated_url)
         annotated_note = str(annotated_image.get("note", "") or "").strip()
         line = (
             f"图{len(input_image_urls)}为带批注效果图，是上一版结果的修改指令图；"
@@ -92,6 +133,15 @@ async def generate_image(
         if annotated_note:
             line += f"批注说明：{annotated_note}"
         slot_labels.append(line)
+        fallback_slot_labels.append(line)
+    for reference_image in reference_images:
+        reference_url = str(reference_image.get("image_url") or "").strip()
+        if not reference_url:
+            continue
+        input_image_urls.append(reference_url)
+        slot_labels.append(
+            f"图{len(input_image_urls)}为参考图：{_reference_usage_rule(reference_image)}"
+        )
     if rag_url:
         input_image_urls.append(rag_url)
         ambience_note = str(rag_image.get("ambience_note", "") or "").strip()
@@ -118,12 +168,21 @@ async def generate_image(
         # Backward compatibility for providers or tasks still reading the old field.
         "ref_image_url": control_url,
     }
+    fallback_prompt = enhanced_prompt.prompt
+    if fallback_slot_labels:
+        fallback_prompt = "\n".join([*fallback_slot_labels, fallback_prompt])
+    fallback_request_dict = {
+        **request_dict,
+        "prompt": fallback_prompt,
+        "input_image_urls": fallback_input_image_urls,
+    }
     update_current_span(
         input={
             "prompt": prompt,
             "negative_prompt": enhanced_prompt.negative_prompt,
             "control_image_url": control_url,
             "annotated_image_url": annotated_url,
+            "reference_image_urls": [image.get("image_url") for image in reference_images],
             "rag_image_url": rag_url,
             "failed_image_url": failed_url,
             "input_image_count": len(input_image_urls),
@@ -136,6 +195,8 @@ async def generate_image(
     # Submit task
     from tasks.image_task import generate_image_task
     task = generate_image_task.delay(request_dict)
+    fallback_attempted = False
+    can_fallback = bool(reference_images) and request_dict["input_image_urls"] != fallback_input_image_urls
     update_current_span(metadata={"task_id": task.id})
 
     await emitter.emit("generation_start", {
@@ -196,6 +257,21 @@ async def generate_image(
                 )
                 return gen_result
             else:
+                if can_fallback and not fallback_attempted:
+                    fallback_attempted = True
+                    update_current_span(
+                        level="WARNING",
+                        status_message=f"generation task failed with reference image inputs; retrying without weak visual references: {result.result}",
+                        metadata={"failed_task_id": task.id},
+                    )
+                    task = generate_image_task.delay(fallback_request_dict)
+                    update_current_span(metadata={"fallback_task_id": task.id})
+                    await emitter.emit("generation_start", {
+                        "task_id": task.id,
+                        "run_id": run_id,
+                        "fallback": True,
+                    })
+                    continue
                 update_current_span(
                     level="ERROR",
                     status_message=f"generation task failed: {result.result}",

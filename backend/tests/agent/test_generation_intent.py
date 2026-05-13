@@ -31,6 +31,18 @@ def test_generation_intent_negative_phrases_block_generation() -> None:
     assert has_explicit_generation_intent([HumanMessage(content="do not generate yet")]) is False
 
 
+def test_generation_intent_ignores_image_send_context() -> None:
+    assert has_explicit_generation_intent([
+        HumanMessage(content="我发送了一张结构底图，请分析这张底图后续可以怎样优化。")
+    ]) is False
+    assert has_explicit_generation_intent([
+        HumanMessage(content="我发送了一张图生图结构底图。底图说明：后面要生成高级效果图。请分析这张底图。")
+    ]) is False
+    assert has_explicit_generation_intent([
+        HumanMessage(content="我发送了一张参考图，主要参考方向是：色彩。请分析如何用于后续生成。")
+    ]) is False
+
+
 def test_generation_intent_ignores_workspace_prompt_context() -> None:
     message = HumanMessage(content="继续调整立面材质\n[用户草稿 prompt: generate modern villa rendering]")
 

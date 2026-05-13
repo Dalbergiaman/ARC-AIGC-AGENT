@@ -38,6 +38,7 @@ class TestProviderPayloads(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(captured["image"], "https://example.com/control.png")
+        self.assertEqual(captured["size"], "2048x1152")
         self.assertIs(captured["watermark"], False)
 
     async def test_volcengine_payload_includes_ordered_input_images(self) -> None:
@@ -131,6 +132,32 @@ class TestProviderPayloads(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(captured["urls"], ["https://example.com/control.png"])
+        self.assertEqual(captured["aspectRatio"], "16:9")
+        self.assertEqual(captured["imageSize"], "2k")
+
+    async def test_grsai_gpt_image_defaults_to_wide_aspect_ratio(self) -> None:
+        captured: dict = {}
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def post(self, _endpoint: str, *, json: dict, headers: dict):
+                captured.update(json)
+                return SimpleNamespace(
+                    raise_for_status=lambda: None,
+                    text='data: {"results":[{"url":"https://example.com/out.png"}]}',
+                )
+
+        with patch("httpx.AsyncClient", return_value=FakeClient()):
+            await GrsaiClient(api_key="key", model="gpt-image-2").generate(
+                GenerationRequest(prompt="modern villa")
+            )
+
+        self.assertEqual(captured["aspectRatio"], "16:9")
 
     async def test_grsai_payload_includes_ordered_input_images(self) -> None:
         captured: dict = {}
@@ -243,6 +270,7 @@ class TestProviderPayloads(unittest.IsolatedAsyncioTestCase):
             {"image": "https://example.com/control.png"},
             {"text": "modern villa"},
         ])
+        self.assertEqual(captured["parameters"]["size"], "2048*1152")
 
     async def test_bailian_payload_includes_ordered_input_images_before_text(self) -> None:
         captured: dict = {}

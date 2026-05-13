@@ -9,8 +9,8 @@ class GenerationRequest:
     ref_image_url: str | None = None
     control_image_url: str | None = None
     input_image_urls: list[str] | None = None
-    width: int = 1920
-    height: int = 1920
+    width: int = 2048
+    height: int = 1152
     steps: int = 30
     seed: int | None = None
     aspectRatio: str | None = None

@@ -18,7 +18,7 @@ from agent.state_utils import (
     reset_generation_run,
     update_completeness,
 )
-from agent.tools.image_analysis import analyze_reference_image
+from agent.tools.image_analysis import _to_data_url, analyze_reference_image
 from agent.tools.image_evaluator import evaluate_generated_image
 from agent.tools.image_generator import NullEmitter, generate_image
 from api.routes.library import RAG_PICK_KEY, RAG_PICK_SKIP_VALUE
@@ -54,6 +54,11 @@ _IMAGE_URL_RE = re.compile(r'https?://\S+\.(?:jpg|jpeg|png|webp)', re.IGNORECASE
 _GENERATION_NEGATIVE_RE = re.compile(
     r"(不要|别|先不|暂不|不用|无需|先别)\s*(生成|出图|渲染)|"
     r"(do\s+not|don't|dont|no)\s+(generate|render|create\s+(an?\s+)?image|generation)",
+    re.IGNORECASE,
+)
+_IMAGE_SEND_CONTEXT_RE = re.compile(
+    r"(我发送了一张|发送.*(参考图|结构底图|底图|图片)|上传.*(参考图|结构底图|底图|图片)|"
+    r"(参考图|结构底图|底图).*分析|请分析这张)",
     re.IGNORECASE,
 )
 _GENERATION_INTENT_RE = re.compile(
@@ -214,7 +219,7 @@ def _vision_urls_for_agent(state: AgentState) -> list[str]:
     urls = [str(url) for url in (state.get("_current_vision_images") or []) if url]
 
     seen: set[str] = set()
-    return [url for url in urls if not (url in seen or seen.add(url))]
+    return [_to_data_url(url) for url in urls if not (url in seen or seen.add(url))]
 
 
 def has_explicit_generation_intent(messages: list) -> bool:
@@ -227,6 +232,8 @@ def has_explicit_generation_intent(messages: list) -> bool:
     if not text:
         return False
     if _GENERATION_NEGATIVE_RE.search(text):
+        return False
+    if _IMAGE_SEND_CONTEXT_RE.search(text):
         return False
     return _GENERATION_INTENT_RE.search(text) is not None
 

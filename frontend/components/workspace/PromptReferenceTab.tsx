@@ -18,6 +18,7 @@ const INTENT_LABELS: Record<ReferenceIntent, string> = {
 };
 
 const INTENT_OPTIONS = Object.entries(INTENT_LABELS) as [ReferenceIntent, string][];
+const MAX_REFERENCE_IMAGES = 3;
 
 type Props = {
   sessionId: string;
@@ -36,6 +37,7 @@ export function PromptReferenceTab({
   const controlFileInputRef = useRef<HTMLInputElement>(null);
   const [styleTemplates, setStyleTemplates] = useState<StyleTemplate[]>([]);
   const [styleTemplateError, setStyleTemplateError] = useState<string | null>(null);
+  const [referenceLimitError, setReferenceLimitError] = useState<string | null>(null);
   const {
     promptDraft,
     getReferenceImages,
@@ -90,7 +92,19 @@ export function PromptReferenceTab({
     if (files.length === 0) return;
     e.target.value = "";
 
-    for (const file of files) {
+    const availableSlots = Math.max(0, MAX_REFERENCE_IMAGES - referenceImages.length);
+    if (availableSlots === 0) {
+      setReferenceLimitError(`最多上传 ${MAX_REFERENCE_IMAGES} 张参考图，请先删除旧图。`);
+      return;
+    }
+    const filesToUpload = files.slice(0, availableSlots);
+    if (files.length > availableSlots) {
+      setReferenceLimitError(`最多上传 ${MAX_REFERENCE_IMAGES} 张参考图，本次只添加前 ${availableSlots} 张。`);
+    } else {
+      setReferenceLimitError(null);
+    }
+
+    for (const file of filesToUpload) {
       const tempId = `uploading-${crypto.randomUUID()}`;
       addReferenceImage(sessionId, { fileId: tempId, url: "", intent: "composition", uploading: true });
 
@@ -327,6 +341,7 @@ export function PromptReferenceTab({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
+            disabled={referenceImages.length >= MAX_REFERENCE_IMAGES}
             className="inline-flex items-center gap-1 rounded-lg border border-black/8 bg-white px-2.5 py-1 text-xs text-foreground hover:bg-black/[0.04]"
           >
             <Upload className="size-3" />
@@ -341,6 +356,11 @@ export function PromptReferenceTab({
             onChange={handleFileChange}
           />
         </div>
+        {referenceLimitError && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            {referenceLimitError}
+          </div>
+        )}
 
         {referenceImages.length === 0 ? (
           <div className="rounded-xl border border-dashed border-black/8 px-4 py-6 text-center text-xs text-muted-foreground">

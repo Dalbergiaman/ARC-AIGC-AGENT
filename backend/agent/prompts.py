@@ -97,6 +97,8 @@ def agent_system(
 - 如果用户发送图生图结构底图，本轮必须结合图片和上下文简单分析可优化方向，例如体量关系、透视、立面层次、开窗节奏、材质替换、景观界面或光线氛围；不要只回复"已收到"。
 - 如果用户发送参考图且说明了参考方向，本轮必须只围绕该方向分析如何参考这张图，例如构图、材质、色调、光线或环境氛围；不要把参考图当作图生图结构底图。
 - 如果用户发送参考图但没有说明参考方向，本轮必须做全图简要分析，分别点出最值得参考的构图、色彩、风格、材质、光线或环境方向。
+- 只有用户本轮明确要求生成，且你输出 `ready_to_generate: true` 时，才能说"正在生成/开始生成/马上生成"这类已经开始行动的表述。
+- 如果本轮只是记录修改、分析图片或深化方案，绝对不要说"现在为你重新生成"、"马上为你输出"、"正在为你生成"、"为你生成符合要求的效果图"等暗示已开始执行的语言；应改成"如果需要重新生成，请告诉我"或"确认后我再进入生成"。
 - 如果用户明确要求生成，简短确认进入生成，不再继续发散，以免阻塞动作。
 - 灵感建议只能写在 `reply` 中，不能擅自写入 `design_state_updates`；只有用户明确采纳时才更新 DesignState。
 - 回复长度通常为 3～6 句，中文自然表达，专业但不要像报告。
@@ -145,36 +147,16 @@ reply 示例：
 def _reference_prompt_line(image: ReferenceImageAnalysis) -> str:
     intent = str(image.get("reference_intent", "") or "").strip()
     note = str(image.get("intent_note", "") or "").strip()
-    description = str(image.get("description", "") or "").strip()
-    style = str(image.get("style", "") or "").strip()
-    material = str(image.get("facade_material", "") or "").strip()
-    lighting = str(image.get("lighting", "") or "").strip()
-    viewpoint = str(image.get("viewpoint", "") or "").strip()
-    color = str(image.get("color_palette", "") or "").strip()
-
-    if intent == "composition":
-        core = "；".join(filter(None, [f"构图/视角：{viewpoint}" if viewpoint else "", description]))
-    elif intent == "color":
-        core = "；".join(filter(None, [f"色彩：{color}" if color else "", description]))
-    elif intent == "style":
-        core = "；".join(filter(None, [f"建筑样式：{style}" if style else "", description]))
-    elif intent == "material":
-        core = "；".join(filter(None, [f"材质：{material}" if material else "", description]))
-    elif intent == "lighting":
-        core = "；".join(filter(None, [f"光线：{lighting}" if lighting else "", description]))
-    elif intent == "surroundings":
-        core = description
-    else:
-        core = "；".join(filter(None, [
-            description,
-            f"风格：{style}" if style else "",
-            f"材质：{material}" if material else "",
-            f"光线：{lighting}" if lighting else "",
-            f"色彩：{color}" if color else "",
-        ]))
-
-    if not core:
-        core = "参考图已有视觉分析，但可用特征较少"
+    rules = {
+        "composition": "按构图/视角参考，只借鉴画面关系，不覆盖图生图底图的建筑体量、透视和空间关系",
+        "color": "按色彩参考，只借鉴色彩关系、饱和度、冷暖倾向和明暗对比",
+        "style": "按建筑样式参考，只借鉴表达语言、立面气质和细部密度，不复制具体体量",
+        "material": "按材质参考，只借鉴材质肌理、玻璃反射、金属/石材/木材等质感",
+        "lighting": "按光线参考，只借鉴光线时段、方向、色温、阴影和氛围",
+        "surroundings": "按环境参考，只借鉴植被、水面、街景或场地氛围",
+        "other": "按用户说明限定方向参考，不覆盖结构底图和最新文字要求",
+    }
+    core = rules.get(intent) or "作为全图视觉参考，但不得覆盖结构底图的体量、透视和空间关系"
     suffix = "；".join(filter(None, [
         f"参考意图：{intent}" if intent else "参考意图：全图分析",
         f"用户说明：{note}" if note else "",
@@ -236,19 +218,22 @@ def enhance_prompt_system(
         else "prompt 必须是中文，直接保留用户原话中的具体位置、数量、材质、颜色、禁止项和修改动作；少用翻译腔英文关键词"
     )
     quality_guardrail = (
-        "【固定品质护栏】\n"
-        "正向品质：大师级建筑效果图，高端建筑可视化作品，专业效果图公司品质，获奖级建筑渲染，"
-        "摄影级画面品质，电影级光线，高级商业摄影质感，真实相机镜头语言，细腻后期调色，"
-        "照片级真实感，超高细节，高分辨率，细节锐利，高级材质质感，真实全局光照，"
-        "精致光影层次，准确透视，构图干净，画面主体清晰，空间层次丰富，优雅氛围，"
-        "符合物理规律的材质反射与粗糙度\n"
-        "建筑正确性：建筑结构合理，建筑几何准确，立面系统真实，体量比例协调，窗墙分格一致，"
-        "结构逻辑可信，边缘干净，柱、梁、楼板、屋顶、栏杆、门窗洞口关系正确，"
-        "人物、车辆、景观与建筑尺度关系真实\n"
+        "【建筑效果图品质护栏：克制、干净、可执行】\n"
+        "核心原则：高级建筑效果图不是堆满细节，而是主体清晰、信息有秩序、材质和光线受控。"
+        "宁可画面克制、干净、留白明确，也不要随机增加车辆、人物、装饰线条、植被碎片或无意义小构件。\n"
+        "画面组织：主体建筑必须是第一视觉中心；构图干净，前中后景层次明确；前景车辆、人物、植被、水面只能辅助尺度和氛围，不能喧宾夺主；"
+        "环境元素要少而准，不要形成杂乱前景或噪声背景。\n"
+        "玻璃与反射：玻璃要通透、反射受控、不过曝不死白，能看到适度室内结构和暖光层次；"
+        "避免脏玻璃反射、碎片化反光、随机高亮斑点、杂乱倒影和廉价 HDR 感。\n"
+        "材质与立面：材质真实但克制，金属/石材/混凝土/木材要有合理粗糙度和边缘细节；"
+        "立面分区、开窗节奏、楼板线、栏杆、檐口、入口节点必须有建筑逻辑，细节精致但不能碎片化。\n"
+        "光线与后期：光线方向明确，冷暖关系清晰，暗部有层次，高光受控；后期像成熟商业建筑可视化作品，"
+        "避免过度锐化、过度饱和、脏灰、塑料质感、学生作业感。\n"
         "负向排除：低质量，低分辨率，模糊，噪点，建筑变形，结构错误，透视错误，立面扭曲，"
         "几何混乱，窗户不一致，柱体扭曲，楼板断裂，不合理悬挑，廉价材质，塑料质感，"
-        "不真实光照，过曝，欠曝，构图混乱，画面脏乱，图像瑕疵，元素重复，人物畸形，"
-        "水印，文字，logo"
+        "不真实光照，过曝，欠曝，构图混乱，画面脏乱，杂乱前景，随机车辆，车辆喧宾夺主，"
+        "脏玻璃反射，玻璃死白，碎片化反光，植被噪声，水面脏乱反射，无意义装饰线条，"
+        "元素重复，人物畸形，文字，水印，logo"
     )
 
     ref_section = ""
@@ -333,8 +318,9 @@ def enhance_prompt_system(
 - 将"模型整理描述"、"用户自定义描述"和"用户最新原始要求"融合进 prompt，不要只输出关键词
 - 仅当存在"用户选择的风格模板"时，才将其作为风格上下文融入 prompt；用户未选模板时，按设计参数中的风格字段自然描述即可，不要套用任何模板关键词库
 - 融入参考图特征时遵循参考意图和用户说明，不要把色彩参考误写成体量约束
-- prompt 必须自然融入固定品质护栏中的正向品质和建筑正确性要求，但不要让质量词覆盖用户的具体建筑需求
-- negative_prompt 必须包含固定品质护栏中的负向排除词，并可追加风格冲突词；若 prompt 为中文，negative_prompt 仍可混用这些英文质量词
+- prompt 必须先压缩再融合上下文：重复信息只保留一次；用户最新要求优先；control image 结构优先；reference image 只按 intent 使用
+- prompt 必须把"高级质感"落到具体画面控制：画面克制、主体清晰、玻璃反射受控、材质真实但不过度、环境元素少而准；不要只堆"大师级/高质量/超细节"等泛化形容词
+- negative_prompt 必须包含品质护栏中的杂乱感和低质问题：杂乱前景、随机车辆、车辆喧宾夺主、脏玻璃反射、碎片化反光、植被噪声、水面脏乱反射、学生作业感等；若 prompt 为中文，negative_prompt 仍可混用英文质量词
 - 不要在 prompt 中重复相同概念"""
 
 

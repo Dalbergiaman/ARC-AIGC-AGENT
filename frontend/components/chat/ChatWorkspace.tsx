@@ -426,8 +426,8 @@ export function ChatWorkspace({ sessionId }: Props) {
       return;
     }
     const content = controlImage.note?.trim()
-      ? `我发送了一张图生图结构底图。底图说明：${controlImage.note.trim()}。请分析这张底图后续可以怎样优化。`
-      : "我发送了一张图生图结构底图，请分析这张底图后续可以怎样优化。";
+      ? `我发送了一张结构底图。底图说明：${controlImage.note.trim()}。请分析这张底图后续可以怎样优化。`
+      : "我发送了一张结构底图，请分析这张底图后续可以怎样优化。";
     await submitPayload(
       content,
       {

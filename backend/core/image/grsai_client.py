@@ -56,7 +56,7 @@ class GrsaiClient(ImageGeneratorBase):
             payload = {
                 "model": self._model,
                 "prompt": prompt,
-                "aspectRatio": "1:1",
+                "aspectRatio": request.aspectRatio or "16:9",
                 "quality": "auto",
                 "shutProgress": True
             }
@@ -64,8 +64,8 @@ class GrsaiClient(ImageGeneratorBase):
             payload = {
                 "model": self._model,
                 "prompt": prompt,
-                "aspectRatio": "auto",
-                "imageSize": "2k",
+                "aspectRatio": request.aspectRatio or "16:9",
+                "imageSize": request.imageSize or "2k",
                 "shutProgress": True
             }
 

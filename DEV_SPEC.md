@@ -511,8 +511,8 @@ class GenerationRequest:
     ref_image_url: str | None = None       # 兼容旧字段；新代码写入 control_image_url
     control_image_url: str | None = None   # 单张图生图结构底图
     input_image_urls: list[str] | None = None  # 图生图输入顺序：control_image 在前，annotated_image 在后
-    width: int = 1344
-    height: int = 768
+    width: int = 2048
+    height: int = 1152
     steps: int = 30
     seed: int | None = None
     aspectRatio: str | None = None
@@ -906,9 +906,9 @@ Celery result backend 使用 Redis，`task_id` 存入 `AgentState.current_task_i
 task = generate_image_task.delay(request)
 yield emitter.emit("generation_start", {"task_id": task.id, "run_id": run_id})
 
-# 2. 轮询 Redis，每 2s 检查一次，最多等 120s；同时检查 cancel flag
+# 2. 轮询 Redis，每 2s 检查一次，最多等 240s；同时检查 cancel flag
 cancel_key = f"cancel:{session_id}:{run_id}"
-for _ in range(60):
+for _ in range(120):
     await asyncio.sleep(2)
     if await redis.exists(cancel_key):
         raise CancelledError("interrupted by user")
@@ -935,7 +935,7 @@ raise TimeoutError("generation timeout")
 ### 设计原则
 
 - `control_image` 是图生图结构底图，v1 只允许 1 张。它用于约束建筑形态、体量、透视、尺度、空间关系和主要构图。
-- `reference_images` 是语义参考图，允许多张。它们继续通过 VLM 分析后注入 `agent_node`、prompt 构建和结果评估，用于风格、材质、光线、色彩、环境等参考。
+- `reference_images` 是语义/视觉参考图，最多 3 张。它们继续通过 VLM 分析保存结构化语义，同时在图生图生成时作为 provider 输入图传入；prompt 只保留每张图的 intent 使用规则，视觉细节由图片本身承担。
 - 不再从 `reference_images` 中自动取最后一张作为图生图底图；用户必须在前端显式上传或替换 `control_image`。
 
 ### 存储策略
@@ -993,9 +993,11 @@ raise TimeoutError("generation timeout")
 
 Agent 收到显式发送的图片后将其写入本轮 `input_state`：`control_image` 存入 `AgentState.control_image`，生成节点将其写入 `GenerationRequest.control_image_url`；`reference_images` 的 `url`、`intent`、`note` 存入 `AgentState.reference_images`，并调用 `analyze_reference_image(image_url=url)` 进行结构化视觉分析。主对话 `agent_node` 同时通过本轮临时 `_current_vision_images` 把显式发送的图片传给 VLM，让模型必须针对图片类别回复：control image 分析底图可优化方向；reference image 按用户 intent 分析如何参考，未指定时做全图简要分析。
 
-参考图原有结构化分析流程继续保留，但 `enhance_prompt` 只按用户标注 intent 克制注入相关维度，避免把主对话分析和生成 prompt 语义重复放大。`control_image` 不进入 `reference_images`，也不参与参考相似度评估。
+参考图原有结构化分析流程继续保留，但 `enhance_prompt` 只按用户标注 intent 写入使用规则，避免把主对话分析和生成 prompt 语义重复放大。图生图请求的图片顺序固定为：`control_image` → `annotated_image` → 已发送 `reference_images`（最多 3 张）→ `rag_image` → 上一轮失败图。`control_image` 不进入 `reference_images`，也不参与参考相似度评估；它在生成输入中始终是最高优先级结构约束。
 
-当前实现状态：`POST /api/upload` 返回 `{file_id, url}`；`POST /api/chat/sessions/{session_id}/messages` 已支持 `control_image` / `reference_images` / `workspace` payload，并同步更新 Agent 状态。`sessions.workspace_state` 是结构化 prompt 草稿的服务端主存储；已发送参考图写入 PostgreSQL `reference_images.analysis`，其中保存 VLM 分析、用户 `intent/note`、`reference_intent/intent_note`、发送状态等；前端 `localStorage` 只作为未同步草稿和同浏览器 UI 恢复兜底。`control_image` 当前仍按 sessionId 存前端草稿，只有点击发送底图时才随该轮消息提交给 Agent。
+如果 provider 多图输入失败，生成工具会降级重试一次：只保留 `control_image` / `annotated_image` 这类强约束图，reference/rag/failed 弱参考回到文字规则，避免整轮直接失败。
+
+当前实现状态：`POST /api/upload` 返回 `{file_id, url}`；`POST /api/chat/sessions/{session_id}/messages` 已支持 `control_image` / `reference_images` / `workspace` payload，并同步更新 Agent 状态。`sessions.workspace_state` 是结构化 prompt 草稿的服务端主存储；已发送参考图写入 PostgreSQL `reference_images.analysis`，其中保存 VLM 分析、用户 `intent/note`、`reference_intent/intent_note`、发送状态等；前端 `localStorage` 只作为未同步草稿和同浏览器 UI 恢复兜底。`control_image` 当前仍按 sessionId 存前端草稿，只有点击发送底图时才随该轮消息提交给 Agent。前端限制每个 session 最多保留 3 张参考图，删除旧图后才能继续上传。
 
 注意：早期参考图记录可能只含 `analysis.intent` / `analysis.note`，分析完成后的记录会补充 `reference_intent` / `intent_note`。前端恢复历史会话时应兼容两组字段，避免旧记录或未完成分析的记录恢复为默认参考意图。
 
@@ -1661,7 +1663,9 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
 11. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-13：优化 `enhance_prompt_system()` 的建筑效果图品质护栏，减少泛化质量词堆叠，改为更可执行的画面控制规则。新的提示词强调“克制、干净、主体清晰、信息有秩序”，要求玻璃通透且反射受控、环境元素少而准、前景车辆/人物/植被/水面只辅助尺度和氛围，并在负向提示中明确排除杂乱前景、随机车辆、车辆喧宾夺主、脏玻璃反射、碎片化反光、植被噪声、水面脏乱反射、学生作业感等问题。`enhance_prompt` 生成 prompt 时要求先压缩再融合上下文，避免把多来源信息机械堆进提示词。
 - 2026-05-13：图片上传与发送语义解耦。上传 control/reference 图片只写入前端草稿并预览，不进入 AgentState；每张图片卡片新增独立「发送」按钮，点击后才复用 `POST /api/chat/sessions/{session_id}/messages` 提交正式用户消息。`agent_node` 通过本轮临时 `_current_vision_images` 把显式发送的图片传给主 VLM 对话，要求 control image 回复底图可优化方向，reference image 按用户 intent 分析如何参考，未指定时全图分析；普通文字消息不再自动夹带未发送图片。参考图原有 `analyze_reference_image` 结构化分析保留，但 `enhance_prompt` 按 intent 克制注入相关维度，避免和主对话分析重复放大。
+- 2026-05-13：图生图链路接入已发送参考图视觉输入。前端限制每个 session 最多 3 张 reference image；生成工具按 `control_image` → `annotated_image` → `reference_images`（最多 3）→ `rag_image` → failed image 顺序构造 `input_image_urls`，并在 prompt 头部按图位写明每张图的职责。参考图传入 provider 后，`enhance_prompt` 不再注入完整视觉分析，只写 intent 使用规则（图片负责视觉细节，文字负责约束用法），避免重复传入信息。若 provider 多图输入失败，工具会降级重试一次，只保留 control/annotated 强约束图，弱参考回到文字规则。
 - 2026-05-13：修正前端 Agent 阶段列表中 running 状态残留的问题。此前 `appendAgentStatus()` 每收到 `running` / `done` 都追加一条新记录，同一阶段的旧 `running` 记录不会被覆盖，导致流程结束后列表里仍显示旋转图标。现改为同一 assistant message 下按 `stage` 更新同一条状态，后续 `done` / `error` 覆盖原 running；`onDone` 时新增兜底 `finishRunningAgentStatuses()`，将仍处于 running 的阶段置为 done，避免 SSE 漏发阶段结束事件时 UI 看起来仍在工作。
 - 2026-05-13：更新 Dashboard 图像生成 provider 模型清单，修正前端保存旧模型名导致后端调用失败的问题。当前支持模型明确为：GrsAI `gpt-image-2` / `nano-banana-pro`；火山引擎 `doubao-seedream-5-0-260128` / `doubao-seedream-4-5-251128`；百炼 `wan2.7-image-pro`。`dashboard_service.DEFAULT_CONFIG`、`PROVIDERS`、`backend/config/dashboard.yaml.example` 和本地 `dashboard.yaml` 已同步；`get_config()` 新增旧模型归一化逻辑，若已有配置中的 `image_provider.model` 不在当前 provider 支持列表，会自动改为该 provider 的第一个模型，避免前端打开 Dashboard 后继续写回无效模型。
 - 2026-05-13：为建筑效果图提示词生成增加中文固定品质护栏。`enhance_prompt_system()` 新增【固定品质护栏】上下文，分为正向品质（大师级建筑效果图、高端建筑可视化作品、专业效果图公司品质、摄影级画面品质、电影级光线、高级商业摄影质感、真实相机镜头语言、细腻后期调色等）、建筑正确性（建筑结构合理、建筑几何准确、立面系统真实、体量比例协调、窗墙分格一致、结构逻辑可信等）和负向排除（低质量、模糊、建筑变形、结构错误、透视错误、立面扭曲、廉价材质、塑料质感、水印、文字、logo 等）。要求 LLM 将正向品质和建筑正确性自然融入 prompt，将负向排除写入 `negative_prompt`；由于 provider 层已统一把 `negative_prompt` 拼回主 prompt，因此这些质量约束会实际传给图像模型。

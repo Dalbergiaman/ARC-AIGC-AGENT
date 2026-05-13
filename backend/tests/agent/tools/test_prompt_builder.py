@@ -105,11 +105,13 @@ async def test_enhance_prompt_keeps_img2img_edit_context() -> None:
     assert "只参考木材质" in captured["system"]
     assert "中文正向提示词" in captured["system"]
     assert "prompt 必须是中文" in captured["system"]
-    assert "固定品质护栏" in captured["system"]
-    assert "专业效果图公司品质" in captured["system"]
-    assert "摄影级画面品质" in captured["system"]
-    assert "电影级光线" in captured["system"]
-    assert "建筑结构合理" in captured["system"]
+    assert "建筑效果图品质护栏" in captured["system"]
+    assert "画面克制" in captured["system"]
+    assert "主体建筑必须是第一视觉中心" in captured["system"]
+    assert "玻璃要通透、反射受控" in captured["system"]
+    assert "杂乱前景" in captured["system"]
+    assert "随机车辆" in captured["system"]
+    assert "学生作业感" in captured["system"]
     assert "建筑变形" in captured["system"]
 
 
