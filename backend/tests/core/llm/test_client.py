@@ -50,6 +50,25 @@ class TestLLMClient(unittest.IsolatedAsyncioTestCase):
         mock_inner.ainvoke.assert_not_called()
         self.assertEqual(result, "vision response")
 
+    @patch("core.llm.client.dashboard_service.get_config", return_value=_MOCK_CONFIG)
+    @patch("core.llm.client.LLMClientFactory.create")
+    async def test_with_images_forwards_enable_thinking(self, mock_create, _mock_cfg):
+        mock_inner = MagicMock()
+        mock_inner.ainvoke_with_vision = AsyncMock(return_value="vision response")
+        mock_create.return_value = mock_inner
+
+        await LLMClient().ainvoke(
+            [HumanMessage(content="describe this")],
+            images=["http://example.com/img.jpg"],
+            enable_thinking=False,
+        )
+
+        mock_inner.ainvoke_with_vision.assert_awaited_once_with(
+            [HumanMessage(content="describe this")],
+            ["http://example.com/img.jpg"],
+            enable_thinking=False,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -83,11 +83,14 @@ class _BaseHTTPLLMClient(LLMClientBase):
         self,
         messages: list[BaseMessage],
         images: list[str],
+        enable_thinking: bool = True,
     ) -> str:
         payload = {
             "model": self._model,
             "messages": _build_messages(messages, images),
         }
+        if not enable_thinking:
+            payload.update(self._thinking_off_params())
         data = await self._post(payload)
         return data["choices"][0]["message"]["content"]
 

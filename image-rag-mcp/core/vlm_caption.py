@@ -29,6 +29,14 @@ def _endpoint_for(provider: str) -> str:
     raise ValueError(f"Unsupported VLM provider: {provider!r}")
 
 
+def _thinking_off_params(provider: str) -> dict:
+    if provider == "bailian":
+        return {"enable_thinking": False}
+    if provider == "volcengine":
+        return {"thinking": {"type": "disabled"}}
+    return {}
+
+
 async def generate_caption(image_url: str) -> str:
     llm = config.get_llm_config()
     provider = llm.get("provider", "")
@@ -50,6 +58,7 @@ async def generate_caption(image_url: str) -> str:
             },
         ],
     }
+    payload.update(_thinking_off_params(provider))
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",

@@ -14,6 +14,7 @@ class LLMClientBase(ABC):
         self,
         messages: list[BaseMessage],
         images: list[str],
+        enable_thinking: bool = True,
     ) -> str:
         ...
 

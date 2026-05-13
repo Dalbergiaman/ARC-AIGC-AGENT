@@ -64,7 +64,7 @@ async def analyze_reference_image(image_url: str) -> dict:
         HumanMessage(content="请分析这张建筑参考图。"),
     ]
 
-    raw = await _llm.ainvoke(messages, images=[resolved_url])
+    raw = await _llm.ainvoke(messages, images=[resolved_url], enable_thinking=False)
     update_current_generation(
         input={"image_url": image_url, "resolved_as_data_url": resolved_url.startswith("data:")},
         output=message_preview(raw),

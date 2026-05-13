@@ -25,7 +25,11 @@ class LLMClient:
     ) -> str:
         client = self._make_client()
         if images:
-            return await client.ainvoke_with_vision(messages, images)
+            return await client.ainvoke_with_vision(
+                messages,
+                images,
+                enable_thinking=enable_thinking,
+            )
         return await client.ainvoke(messages, enable_thinking=enable_thinking)
 
     async def astream(
