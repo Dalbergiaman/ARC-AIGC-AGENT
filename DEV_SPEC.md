@@ -140,7 +140,7 @@ aigc_agent/
     │       ├── prompt_builder.py       # enhance_prompt + refine_prompt — Prompt 构建与修正
     │       ├── image_generator.py      # generate_image — 调用 core/image/generator
     │       ├── image_evaluator.py      # evaluate_generated_image — 视觉 LLM 评估生成结果
-    │       ├── search_library.py       # search_similar_cases — 调用 image-rag-mcp 检索
+    │       ├── search_library.py       # 旧 search_similar_cases stub（D-4 后废弃，RAG 由 graph.py::rag_gate_node 直接调 MCP）
     │       └── prompt_templates.py     # 纯数据文件：9 种风格关键词库，供 /api/styles/templates 与 agent_system 建议提示使用
     ├── core/
     │   ├── llm/
@@ -153,6 +153,7 @@ aigc_agent/
     │   └── image/
     │       ├── generator.py            # 图像生成调度器（多平台统一接口）
     │       ├── base.py                 # 抽象基类 ImageGeneratorBase + 统一数据结构
+    │       ├── dimensions.py           # Pillow 读取图像宽高，按底图比例规范化 2K 输出尺寸
     │       ├── factory.py              # ImageGeneratorFactory
     │       ├── bailian_client.py       # 阿里云百炼（Qwen）客户端
     │       ├── volcengine_client.py    # 火山引擎豆包客户端
@@ -188,8 +189,8 @@ class AgentState(MessagesState):  # MessagesState 是带 add_messages reducer �
     generation_results: list[GenerationResult]      # 历史生成结果
     retry_count: int                     # 当前生成任务的重试次数（上限 3，每次新生成意图重置）
     last_evaluation: EvaluationResult | None        # 最近一次评估结果
-    similar_cases: list[ImageRecord]     # RAG 检索到的参考案例
-    last_search_signature: dict | None   # 上次 RAG 检索使用的核心设计参数
+    rag_image: RagImage | None           # 用户从 RAG 候选中选中的氛围参考图
+    pending_rag_candidates: list[dict] | None  # rag_gate_node 最近召回的候选图
     best_generation_result: GenerationResult | None  # 当前生成任务的最高分结果
     current_task_id: str | None          # 当前 Celery 任务 ID
     phase: Literal["collecting", "generating", "evaluating", "interrupted", "done"]
@@ -326,11 +327,11 @@ Agent 不完全依赖 ReAct 自由调用完整生成链路。单一 `agent` 节�
   → agent（更新 DesignState / 判断意图 / 必要时调用轻量工具）
   → 若信息不足：回复追问
   → 若需要生成：
-      → rag_gate（按规则判断是否调用 search_similar_cases）
       → enhance_prompt
+      → rag_gate（基于 EnhancedPrompt 生成检索文本，调用 MCP search_by_text）
       → generate_image
       → evaluate_generated_image
-      → score < 0.8 且 retry_count < 3：refine_prompt → generate_image → evaluate_generated_image
+      → fatal_issues 非空或 score < 0.72，且 retry_count < 3：refine_prompt → generate_image → evaluate_generated_image
       → 返回 best_generation_result
 ```
 
@@ -338,7 +339,7 @@ Agent 不完全依赖 ReAct 自由调用完整生成链路。单一 `agent` 节�
 
 - `store_generated_image` 不是 Agent 工具，由前端图片卡片下方的「存入图库」按钮触发，调用独立 REST 接口 `POST /api/library/store`，后端直接调 MCP，不经过 Agent。
 - 每轮用户消息创建新的 `turn_id` 和 `run_id`；`retry_count`、`best_generation_result`、`current_task_id` 只作用于当前生成任务，新生成意图开始时重置。
-- `agent` 可自主调用轻量工具（如 `analyze_reference_image`、`search_similar_cases`），但图像生成、评估、重试由确定性子流程控制。
+- `agent` 可按规则调用轻量工具（如 `analyze_reference_image`），但图像生成、RAG 召回、评估、重试由确定性子流程节点控制。
 - 风格关键词不再由 Agent 自动注入：`agent_node` 不再根据 `design_state.style` 自动查库注入，`enhance_prompt` 也不再反查。风格模板只通过前端用户显式选择的 `prompt_template` 注入到 `agent_system` 与 `enhance_prompt_system`；用户未选时 `agent_system` 仅展示可用模板列表，允许 LLM 在 `reply` 中口头建议用户在右侧选择。
 - 图像生成入口由后端显式用户意图规则硬把关：只有用户最新一轮消息明确要求生成 / 出图 / 渲染（含 generate / render / create image 等英文命令）时，才允许 `ready_to_generate` 进入生成子流程；LLM 输出的 `ready_to_generate` 不能单独触发生成，且“不要生成 / 先不生成 / do not generate”等否定表达优先拦截。
 - 所有会影响控制流的 LLM 输出必须通过 Pydantic schema 校验；解析失败时返回可恢复错误或走保守兜底。
@@ -348,9 +349,9 @@ Agent 不完全依赖 ReAct 自由调用完整生成链路。单一 `agent` 节�
 | 工具 | 输入 | 输出 | 调用时机 |
 |------|------|------|----------|
 | `analyze_reference_image` | image_url | ReferenceImageAnalysis | 用户上传参考图后 |
-| `search_similar_cases` | query, filters | list[ImageRecord] | agent 信息收集阶段，RAG 参考 |
-| `enhance_prompt` | design_state, reference_analysis, similar_cases, prompt_template | EnhancedPrompt | 信息充分，首次生成前 |
-| `generate_image` | enhanced_prompt, ref_image_url | GenerationResult | 每次触发生成 |
+| `build_rag_search_query` | enhanced_prompt, design_state | str | `rag_gate_node` 检索前，把最终生图 prompt 改写为 caption 风格检索文本 |
+| `enhance_prompt` | design_state, reference_analysis, llm_description, custom_description, prompt_template, latest_user_request, control_image, annotated_image | EnhancedPrompt | 明确生成意图后、RAG 检索前 |
+| `generate_image` | state, enhanced_prompt | GenerationResult | 每次触发生成 |
 | `evaluate_generated_image` | image_url, design_state, reference_images | EvaluationResult | 每次生成后自动评估 |
 | `refine_prompt` | original_prompt, evaluation | EnhancedPrompt | 评估不满意时修正 |
 
@@ -364,8 +365,8 @@ Agent 不完全依赖 ReAct 自由调用完整生成链路。单一 `agent` 节�
 |------|------|------|----------|
 | 生成重试上限 | 当前生成任务的 `retry_count` 字段计数 | 最多 3 次 | 返回 `best_generation_result` |
 | 工具调用总步数 | LangGraph `recursion_limit` | 25 步 | 当前依赖上层异常处理；返回当前最优结果的兜底需后续补齐 |
-| 用户中断 | Redis cancel flag + LangGraph `interrupt_before` | 轮询内可中断；`interrupt_before` 已配置但 chat 路由尚未恢复旧 run | 不计入 `retry_count`，新消息启动新 run |
-| 评估分数兜底 | `retry_count == 3` 时返回当前最佳结果 | `best_generation_result` | 当前 state 保留最佳结果；用户可见的"最大重试"文案需前端/Agent 回复补齐 |
+| 用户中断 | Redis cancel flag | `generate_image` / `rag_gate` 轮询内可中断；`interrupt_before` 已移除 | 不计入 `retry_count`，新消息启动新 run |
+| 评估分数兜底 | `retry_count == 3` 时停止自动重试 | `best_generation_result` | 当前 state 保留最佳结果；用户可见的"最大重试"文案需前端/Agent 回复补齐 |
 | 结构化输出 | Pydantic schema 校验 | 工具内解析失败重试 1 次 | prompt/evaluator 已有 fallback；agent 节点 JSON 解析失败走追问兜底 |
 
 **用户中断实现说明**：当前主链路用 Redis `active_run:{session_id}` 记录会话正在运行的 `run_id`；收到新消息时设置上一轮 `cancel:{session_id}:{run_id}`。`generate_image` 轮询内检查 cancel flag 并抛 `CancelledError`。`interrupt_before=["agent"]` 已从 Graph 编译配置中移除——该选项需要配套的 `graph.update_state` 恢复逻辑，当前 chat 路由每次新消息都是全新的 `astream_events` 调用，保留该选项会导致 agent 节点永远不执行；用户中断依赖 Redis cancel flag 实现，不依赖 LangGraph interrupt 机制。
@@ -410,7 +411,7 @@ session_id 在整个对话窗口内不变；run_id 每轮 Agent 执行生成一�
 - `generate_image` 工具内部完成后额外推送 `generation_start` / `generation_done`
 - `enhance_prompt_node` / `refine_prompt_node` 得到结构化 prompt 后通过 `QueueEmitter` 推送 `prompt_update`
 
-当前实现注意：`analyze_reference_image`、`search_similar_cases` 是 LangChain `@tool`，可产生 `tool_start/end`；`enhance_prompt`、`generate_image`、`evaluate_generated_image`、`refine_prompt` 当前由 Graph 节点直接调用，不保证出现 LangGraph tool event。前端必须以 `generation_start/done` 和文本事件为主，不应把所有工具状态都当作必达事件。
+当前实现注意：`analyze_reference_image` 是 LangChain `@tool`，可产生 `tool_start/end`；`rag_gate_node`、`enhance_prompt`、`generate_image`、`evaluate_generated_image`、`refine_prompt` 当前由 Graph 节点直接调用，不保证出现 LangGraph tool event。前端必须以 `agent_status`、`rag_candidates`、`generation_start/done` 和文本事件为主，不应把所有工具状态都当作必达事件。
 
 ### 前端消费（`hooks/useSSE.ts`）
 
@@ -534,6 +535,13 @@ class ImageGeneratorBase(ABC):
     async def generate(self, request: GenerationRequest) -> GenerationResult:
         ...
 ```
+
+**图生图输出尺寸策略**
+
+- 生成工具不把底图原始像素尺寸直接传给 provider，而是用 `core/image/dimensions.py` 通过 Pillow 读取本地底图宽高后规范化。
+- 比例来源优先级固定为：`control_image.image_url` → `annotated_image.image_url` → 默认 `16:9`。`reference_images` 与 `rag_image` 只作为视觉/氛围参考，不决定画布比例。
+- 输出按长边 2048 规范化，并四舍五入到 64 像素倍数，避免小底图导致低分辨率 payload；读不到本地图片尺寸或图片无效时回退 `2048x1152 / 16:9`。
+- 规范化后的 `width/height` 传给百炼、火山；规范化后的 `aspectRatio` 传给 GrsAI。GrsAI 的 `imageSize` 仍保持默认 `2k`。
 
 **工厂**
 
@@ -993,9 +1001,9 @@ raise TimeoutError("generation timeout")
 
 Agent 收到显式发送的图片后将其写入本轮 `input_state`：`control_image` 存入 `AgentState.control_image`，生成节点将其写入 `GenerationRequest.control_image_url`；`reference_images` 的 `url`、`intent`、`note` 存入 `AgentState.reference_images`，并调用 `analyze_reference_image(image_url=url)` 进行结构化视觉分析。主对话 `agent_node` 同时通过本轮临时 `_current_vision_images` 把显式发送的图片传给 VLM，让模型必须针对图片类别回复：control image 分析底图可优化方向；reference image 按用户 intent 分析如何参考，未指定时做全图简要分析。
 
-参考图原有结构化分析流程继续保留，但 `enhance_prompt` 只按用户标注 intent 写入使用规则，避免把主对话分析和生成 prompt 语义重复放大。图生图请求的图片顺序固定为：`control_image` → `annotated_image` → 已发送 `reference_images`（最多 3 张）→ `rag_image` → 上一轮失败图。`control_image` 不进入 `reference_images`，也不参与参考相似度评估；它在生成输入中始终是最高优先级结构约束。
+参考图原有结构化分析流程继续保留，但 `enhance_prompt` 只按用户标注 intent 写入使用规则，避免把主对话分析和生成 prompt 语义重复放大。图生图请求的图片顺序固定为：`control_image` → `annotated_image` → 已发送 `reference_images`（最多 3 张）→ `rag_image`。上一轮生成图只允许在 `refine_prompt` 阶段作为 VLM 视觉诊断输入，不进入 provider 图生图输入。`control_image` 不进入 `reference_images`，也不参与参考相似度评估；它在生成输入中始终是最高优先级结构约束。
 
-如果 provider 多图输入失败，生成工具会降级重试一次：只保留 `control_image` / `annotated_image` 这类强约束图，reference/rag/failed 弱参考回到文字规则，避免整轮直接失败。
+如果 provider 多图输入失败，生成工具会降级重试一次：只保留 `control_image` / `annotated_image` 这类强约束图，reference/rag 弱参考回到文字规则，避免整轮直接失败。
 
 当前实现状态：`POST /api/upload` 返回 `{file_id, url}`；`POST /api/chat/sessions/{session_id}/messages` 已支持 `control_image` / `reference_images` / `workspace` payload，并同步更新 Agent 状态。`sessions.workspace_state` 是结构化 prompt 草稿的服务端主存储；已发送参考图写入 PostgreSQL `reference_images.analysis`，其中保存 VLM 分析、用户 `intent/note`、`reference_intent/intent_note`、发送状态等；前端 `localStorage` 只作为未同步草稿和同浏览器 UI 恢复兜底。`control_image` 当前仍按 sessionId 存前端草稿，只有点击发送底图时才随该轮消息提交给 Agent。前端限制每个 session 最多保留 3 张参考图，删除旧图后才能继续上传。
 
@@ -1043,7 +1051,7 @@ generation_tasks  (id, session_id, task_id, prompt, negative_prompt, provider, i
 image_library (
     id              UUID PRIMARY KEY,   -- 与 Milvus 向量的关联键
     session_id      UUID,
-    image_url       TEXT,               -- 短 URL `/static/library/{id}.{ext}`，指向 image-rag-mcp/library_images 本地副本
+    image_url       TEXT,               -- 默认 MinIO 公开 URL；显式 local 时为 `/static/library/{id}.{ext}`
     caption         TEXT,               -- VLM 生成的图片描述
     prompt          TEXT,               -- 正向提示词
     negative_prompt TEXT,
@@ -1053,7 +1061,7 @@ image_library (
 )
 ```
 
-> ⚠️ `image_url` 不是任意外部 URL：D-3 副本管理改造后，store 工具一定会先把源图下载到 `image-rag-mcp/library_images/{id}.{ext}`，PG 与 Milvus 都存指向该副本的短 URL。这样图库与上游 `backend/generated/` 或 MinIO 生命周期完全解耦；前端需要 backend FastAPI 把 `image-rag-mcp/library_images/` 挂为 `/static/library` 静态目录才能直接展示。
+> ⚠️ `image_url` 不是任意外部 URL：D-3 副本管理改造后，store 工具一定会先把源图下载到 `image-rag-mcp/library_images/{id}.{ext}` 本地副本。默认 `IMAGE_LIBRARY_STORAGE=minio` 时，PG 与 Milvus 存 MinIO 公开 URL；显式 `local` 时才存 `/static/library/{id}.{ext}`。这样图库与上游 `backend/generated/` 生命周期解耦，同时 Attu / Milvus 字段中可直接打开默认 MinIO 地址。
 
 当前实现状态：四张主业务表已由 SQLAlchemy 定义并在 FastAPI lifespan 中自动创建；`messages` 已用于 Chat/SSE 主链路；`sessions.workspace_state` 已作为 prompt 草稿主存储；`reference_images.analysis` 已保存参考图分析、用户意图/说明和 `sent` 状态；`generation_tasks` 已保存生成任务 `task_id`、prompt、negative prompt、provider、status、score、raw_response 等，用于历史会话恢复生成结果。旧开发库的 `sessions.title` / `sessions.workspace_state` 和 `generation_tasks` 扩展列由 `models/schema_guard.py` 在启动期补齐。
 
@@ -1064,7 +1072,7 @@ caption_vector  # doubao-embedding-vision 生成（caption 文本输入，文字
 image_vector   # doubao-embedding-vision 生成（图片输入，以图搜图用），2048 维
 style           # 标量过滤字段
 building_type   # 标量过滤字段
-image_url       # 短 URL `/static/library/{id}.{ext}`，与 image_library.image_url 同源；标量字段，直接返回预览
+image_url       # 默认 MinIO 公开 URL，与 image_library.image_url 同源；标量字段，直接返回预览
 ```
 
 ---
@@ -1168,7 +1176,7 @@ Langfuse 3.x 要求 `ENCRYPTION_KEY` 是 64 个十六进制字符（256 bit）�
 
 注意：compose 中的 MinIO 是 Milvus standalone 的对象存储依赖，不代表业务上传文件已支持 MinIO。业务文件存储当前默认使用本地 `backend/uploads/`；生产目标仍是补齐 `STORAGE=minio` 分支后切换到 MinIO。
 
-注意：图库 RAG 的 `image_url` 可通过 `IMAGE_LIBRARY_STORAGE=local|minio` 独立切换。默认 `local` 仍写 `/static/library/{id}.{ext}`；启用 `minio` 后，`image-rag-mcp` 仍保留 `library_images/{id}.{ext}` 本地副本用于 VLM / embedding / `search_by_image` 自查，同时上传一份到业务侧 MinIO bucket（默认 `image-library`），并把 PG/Milvus 中的 `image_url` 写成 `http://localhost:9000/image-library/{id}.{ext}`，方便在 Attu / Milvus 字段中直接打开图片。该能力只覆盖图库 RAG，不等同于后端通用 `STORAGE=minio` 已完成。
+注意：图库 RAG 的 `image_url` 可通过 `IMAGE_LIBRARY_STORAGE=local|minio` 独立切换。默认 `minio` 会让 `image-rag-mcp` 保留 `library_images/{id}.{ext}` 本地副本用于 VLM / embedding / `search_by_image` 自查，同时上传一份到业务侧 MinIO bucket（默认 `image-library`），并把 PG/Milvus 中的 `image_url` 写成 `http://localhost:9000/image-library/{id}.{ext}`，方便在 Attu / Milvus 字段中直接打开图片。显式设置 `IMAGE_LIBRARY_STORAGE=local` 时才回退写 `/static/library/{id}.{ext}`。该能力只覆盖图库 RAG，不等同于后端通用 `STORAGE=minio` 已完成。
 
 注意：postgres 不再挂载 `init-db.sql` 到容器（WSL2 bind mount 路径不稳定）。首次全新部署（空 postgres_data volume）时需手动建库：
 ```bash
@@ -1185,16 +1193,18 @@ docker exec -it aigc_agent-postgres-1 psql -U postgres -c "CREATE DATABASE aigc_
 
 ### 流程
 
-每次进入生成子流程都先经过 `rag_gate_node`：
+每次进入生成子流程先经过 `enhance_prompt_node` 生成最终生图提示词，再进入 `rag_gate_node`：
 
-1. `rag_gate_node` 调用 MCP `search_by_text`（query 由 `building_type` / `style` / `facade_material` 拼接，标量过滤用 `building_type` / `style` 非空值），拿到候选列表。
-2. 通过 `QueueEmitter` 推送 `rag_candidates` SSE 事件，前端在中栏对话渲染候选浮窗。
-3. 节点开始 Redis 长轮询：1s 一次，最多 600s（`RAG_BLOCKING_TIMEOUT=600`）。轮询同时检查：
+1. `enhance_prompt_node` 调用 `enhance_prompt` 生成最终用于生图的 `EnhancedPrompt`。
+2. `rag_gate_node` 基于 `EnhancedPrompt.prompt` 调用 LLM 生成图库检索专用文本；该文本必须贴近入库 caption 标准：2-3 句中文，覆盖建筑类型、风格、外立面材质、光线/氛围、视角、周边环境，去掉负向词、质量词和 provider 指令。若生成失败，回退到旧逻辑（`building_type` / `style` / `facade_material` 拼接）。
+3. `rag_gate_node` 调用 MCP `search_by_text`（query 使用上述检索专用文本，标量过滤仍用 `building_type` / `style` 非空值），拿到候选列表。
+4. 通过 `QueueEmitter` 推送 `rag_candidates` SSE 事件，前端在中栏对话渲染候选浮窗。
+5. 节点开始 Redis 长轮询：1s 一次，最多 600s（`RAG_BLOCKING_TIMEOUT=600`）。轮询同时检查：
    - **pick key** `rag_pick:{session_id}:{run_id}`：用户在浮窗点了候选或「跳过」，由 `POST /api/library/pick` 写入。值为 `image_id`（选中）或 sentinel（跳过，如空字符串或 `null`）。
    - **cancel key** `cancel:{session_id}:{run_id}`：用户在阻塞期间发了新消息，由 chat 路由设置；命中抛 `asyncio.CancelledError`，与 `generate_image` 一致。
-4. 三种退出：
-   - 选中 → state 临时写 `_picked_image_id`，进入 `enhance_prompt` 节点；下载副本 / VLM ambience / 组装 `rag_image` 在 generation 子流程执行（详见 D-4 commit 4）。
-   - 跳过 → 不写 `rag_image`，正常进 `enhance_prompt`。
+6. 三种退出：
+   - 选中 → 下载副本 / VLM ambience / 组装 `rag_image`，然后进入 `generate_image`。
+   - 跳过 → 不写 `rag_image`，正常进 `generate_image`。
    - cancel → 与 `generate_image` 一致抛 `CancelledError`，新一轮 run 重新进入。
    - timeout（600s 兜底）→ 视同跳过，不写 `rag_image`。
 
@@ -1202,7 +1212,7 @@ docker exec -it aigc_agent-postgres-1 psql -U postgres -c "CREATE DATABASE aigc_
 
 选中候选后，generation 子流程做：
 
-1. 通过 MCP `get_image_by_id` 拿原图短 URL（`/static/library/{id}.{ext}`）。
+1. 通过 MCP `get_image_by_id` 拿原图地址（默认 MinIO 公开 URL；显式 local 时为 `/static/library/{id}.{ext}`）。
 2. 调用 `POST /api/library/select` 把图片下载到 `backend/uploads/`，拿到 `{file_id, url}`。
 3. 对该副本跑一次 VLM 分析得到 `ambience_note`（光线 / 色彩 / 氛围 2-3 句，**不写建筑要素**，避免 prompt 风格漂移）。
 4. 写入 `AgentState.rag_image: RagImage`：
@@ -1388,8 +1398,8 @@ backend/tests/
 
 **C-2 Agent 状态与 Graph 骨架**
 
-- [x] 编写 `backend/agent/state.py`（`AgentState` / `DesignState` / `ReferenceImageAnalysis` / `GenerationResult` / `EvaluationResult` / `ImageRecord` 全部类型定义，均使用 `TypedDict`）
-- [x] 编写 `backend/agent/state_utils.py`（规则计算 `missing_fields` / `completeness`，生成 `last_search_signature`，重置当前生成任务运行态）
+- [x] 编写 `backend/agent/state.py`（`AgentState` / `DesignState` / `ReferenceImageAnalysis` / `GenerationResult` / `EvaluationResult` / `RagImage` 全部类型定义，均使用 `TypedDict`）
+- [x] 编写 `backend/agent/state_utils.py`（规则计算 `missing_fields` / `completeness`，重置当前生成任务运行态；旧 `last_search_signature` 已随 D-4 删除）
 - [x] 编写 `backend/agent/checkpointer.py`（`AsyncPostgresSaver`，生命周期由 FastAPI lifespan `async with` 管理）
 - [x] 编写 `backend/agent/graph.py` 骨架（`agent` 决策节点 + `rag_gate` + 确定性生成子流程，早期节点为 stub；当前已移除 `interrupt_before=["agent"]`，中断依赖 Redis cancel flag）
 - [x] 验证空 Graph 可以正常导入，节点结构正确
@@ -1402,8 +1412,8 @@ backend/tests/
 - [x] 编写 `agent/tools/prompt_templates.py`（9 种建筑风格关键词库，每种风格含 `positive` / `negative` / `mood` / `description` 四个字段；`description` 为 2-3 句风格说明，供 `enhance_prompt` LLM 参考；`positive`/`negative` 直接拼入图像生成 prompt）
 - [x] 编写 `agent/tools/image_analysis.py`（`analyze_reference_image`：调用 `LLMClient.ainvoke_with_vision`，返回 `ReferenceImageAnalysis` dict）
 - [x] ~~编写 `agent/tools/style_lookup.py`~~（2026-05-10 移除：风格关键词不再由 Agent 自动注入，仅通过用户在前端选择的 `prompt_template` 注入）
-- [x] 编写 `agent/tools/search_library.py`（`search_similar_cases`：stub，D-4 接入 MCP）
-- [x] 工具按规则显式挂入 Graph：`agent_node` 内按规则调用（有图片 URL → 分析图片）；`rag_gate_node` 按规则调用 `search_similar_cases`
+- [x] ~~编写 `agent/tools/search_library.py`（`search_similar_cases` stub）~~（D-4 后废弃；`rag_gate_node` 直接通过 MCP 调 `search_by_text`）
+- [x] 工具按规则显式挂入 Graph：`agent_node` 内按规则调用（有图片 URL → 分析图片）；`rag_gate_node` 基于 `EnhancedPrompt` 生成检索文本后调用 MCP `search_by_text`
 
 **C-4 Prompt 构建与图像生成工具**
 
@@ -1420,15 +1430,15 @@ backend/tests/
 > ⚠️ 注意：`generate_image` 工具内部是 async 轮询，需用 `asyncio.sleep` 而非 `time.sleep`，否则会阻塞 FastAPI 事件循环。
 
 > 🧪 测试：`tests/agent/tools/test_prompt_builder.py`
-> - `similar_cases=[]` 时 `enhance_prompt` 正常返回，不报错
-> - `refine_prompt` 材质分低时输出包含材质相关关键词（可用 mock LLM）
+> - `build_rag_search_query` 可把最终生图 prompt 改写为图库检索文本，空输出时回退到设计字段拼接
+> - `refine_prompt` 可基于评估结果和上一轮生成图修正提示词（mock LLM）
 
 **C-5 评估与重试工具**
 
 - [x] `agent/prompts.py` 已在 C-3 补充 `evaluate_image_system`（区分有无参考图两套权重说明）
 - [x] 编写 `agent/tools/image_evaluator.py`（`evaluate_generated_image`：VLM 输出各维度原始分，后端代码加权计算总分；`reference_images` 为空时用 5 维权重，非空时用 6 维权重；解析失败重试 1 次，仍失败走 fallback 中性分；补充 `if __name__ == "__main__"` 手动测试入口）
 - [x] `evaluate_image_node` 替换 stub，接入真实评估；`best_generation_result` 跨重试追踪最高分
-- [x] 重试逻辑：`route_after_evaluate` 中 `score < 0.8` 且 `retry_count < 3` 时走 `refine_prompt`，否则返回 `best_generation_result`
+- [x] 重试逻辑：`route_after_evaluate` 中 `fatal_issues` 非空或 `score < 0.72`，且 `retry_count < 3` 时走 `refine_prompt`，否则结束并保留 `best_generation_result`
 
 > 🧪 测试：`tests/agent/tools/test_image_evaluator.py`（9 个测试全部通过）
 > - 无参考图时权重之和为 1.0，不含 `reference_score`
@@ -1523,7 +1533,7 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
 
 **D-3 MCP 工具实现**
 
-- [x] 编写 `image-rag-mcp/tools/store.py`（`store_generated_image`：先把源图下载到 `library_images/{image_id}.{ext}` 副本，再用本地 data URL 跑 VLM caption + 双 embedding，最后插入 PG 和 Milvus；PG/Milvus 都存短 URL `/static/library/{id}.{ext}`，插入失败回滚副本；`style` / `building_type` 从 `design_state` 自动提取）
+- [x] 编写 `image-rag-mcp/tools/store.py`（`store_generated_image`：先把源图下载到 `library_images/{image_id}.{ext}` 副本，再用本地 data URL 跑 VLM caption + 双 embedding，最后插入 PG 和 Milvus；默认把 PG/Milvus 的 `image_url` 写为 MinIO 公开地址，显式 `IMAGE_LIBRARY_STORAGE=local` 时写短 URL `/static/library/{id}.{ext}`；插入失败回滚副本；`style` / `building_type` 从 `design_state` 自动提取）
 - [x] 编写 `image-rag-mcp/tools/search.py`（`search_by_text`：文字 → caption_vector 检索，支持可选 `filters: dict[str, str]` 标量过滤（只对非空字段构造 `expr`）；`search_by_image`：图片 → image_vector 检索，同样支持可选 filters；输入若是短库 URL 自动反解为本地文件 data URL；返回 Milvus 字段 image_id/caption/image_url/style/building_type/score）
 - [x] 编写 `image-rag-mcp/tools/retrieve.py`（`get_image_by_id`：按 image_id 查 PostgreSQL）
 - [x] 编写 `image-rag-mcp/core/storage.py`（图库副本管理：`save_source_url` 下载源 URL（http 或 data URL）到 `library_images/{image_id}.{ext}`，`library_url_for` 生成短 URL，`resolve_library_url` 反解短 URL 为本地 `Path`，`to_data_url` 把本地副本转 base64）
@@ -1663,6 +1673,11 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
 11. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-14：图生图输出尺寸改为按底图比例自动规范化。后端新增 `core/image/dimensions.py`，使用 Pillow 读取本地 `/static/uploads` / `/static/generated` 图片宽高，不使用 VLM 或 OpenCV。生成请求按 `control_image` 优先、无 control 时用 `annotated_image`、都没有则默认 `16:9`；`reference_images` 和 `rag_image` 不决定画布。输出不使用底图原始小尺寸，而是按长边 2048 等比规范化并取 64 像素倍数，写入 `GenerationRequest.width/height/aspectRatio`：百炼/火山使用宽高，GrsAI 使用比例并保持 `imageSize=2k`。
+- 2026-05-14：自动重试不再把上一轮生成图作为 provider 图生图输入。`generate_image()` 删除 `_current_gen_result.image_url` 注入 `input_image_urls` 的逻辑，图像输入顺序固定为 control / annotated / reference_images / rag，避免下一轮被上一轮画面锚定、难以大改。`refine_prompt()` 仍可把上一轮生成图发给 VLM 做视觉诊断，但内部命名和提示词从“失败图/低分图”改为“上一轮生成图像/上一轮生成结果”，要求客观判断哪些保留、哪些修改，不默认否定整张图。
+- 2026-05-14：RAG 检索改为基于最终生图提示词生成 caption 风格检索文本。生成链路从 `agent -> rag_gate -> enhance_prompt -> generate_image` 调整为 `agent -> enhance_prompt -> rag_gate -> generate_image`；`rag_gate_node` 优先读取 `_enhanced_prompt.prompt`，调用 `build_rag_search_query()` 生成 2-3 句中文图库检索专用文本，标准与入库 VLM caption 对齐（建筑类型、风格、外立面材质、光线/氛围、视角、周边环境），并去掉负向词、质量词、provider 指令等噪音。LLM query 生成失败或为空时回退旧字段拼接，`building_type` / `style` 标量过滤暂保持不变，避免召回行为一次性放宽过多。
+- 2026-05-14：右侧工作区新增“上传图库”标签，用于手动把本地图片写入 RAG 图库。前端新增 `ManualLibraryUploadTab`，流程复用现有 `/api/upload` 保存源图，再调用 `POST /api/library/store` 入库；payload 固定 `prompt="手动上传图库图片"`、`provider="manual_upload"`，不新增备注输入框、不经过 Agent。入库后的最终 `image_url` 仍由 image-rag-mcp 按 `IMAGE_LIBRARY_STORAGE` 决定，当前默认写 MinIO 公开地址。
+- 2026-05-14：图库 RAG 存储默认切换为 MinIO。`backend/config.py` 的 `IMAGE_LIBRARY_STORAGE` 默认值和 `image-rag-mcp/config.py` 的 `_DEFAULT_IMAGE_LIBRARY_STORAGE` 均改为 `minio`；后续通过 `POST /api/library/store` 入库的图片仍先保存 `library_images/{image_id}.{ext}` 本地副本用于 VLM / embedding / `search_by_image`，随后发布到业务 MinIO bucket（默认 `image-library`），PG/Milvus 的 `image_url` 默认写 `IMAGE_LIBRARY_MINIO_PUBLIC_ENDPOINT/bucket/key`。如需回退 `/static/library/{id}.{ext}`，必须显式设置 `IMAGE_LIBRARY_STORAGE=local`。该调整不改变通用业务上传：`STORAGE` 仍默认 `local`，`backend/services/storage_service.py` 的 `STORAGE=minio` 分支仍未实现。
 - 2026-05-13：优化 `enhance_prompt_system()` 的建筑效果图品质护栏，减少泛化质量词堆叠，改为更可执行的画面控制规则。新的提示词强调“克制、干净、主体清晰、信息有秩序”，要求玻璃通透且反射受控、环境元素少而准、前景车辆/人物/植被/水面只辅助尺度和氛围，并在负向提示中明确排除杂乱前景、随机车辆、车辆喧宾夺主、脏玻璃反射、碎片化反光、植被噪声、水面脏乱反射、学生作业感等问题。`enhance_prompt` 生成 prompt 时要求先压缩再融合上下文，避免把多来源信息机械堆进提示词。
 - 2026-05-13：图片上传与发送语义解耦。上传 control/reference 图片只写入前端草稿并预览，不进入 AgentState；每张图片卡片新增独立「发送」按钮，点击后才复用 `POST /api/chat/sessions/{session_id}/messages` 提交正式用户消息。`agent_node` 通过本轮临时 `_current_vision_images` 把显式发送的图片传给主 VLM 对话，要求 control image 回复底图可优化方向，reference image 按用户 intent 分析如何参考，未指定时全图分析；普通文字消息不再自动夹带未发送图片。参考图原有 `analyze_reference_image` 结构化分析保留，但 `enhance_prompt` 按 intent 克制注入相关维度，避免和主对话分析重复放大。
 - 2026-05-13：图生图链路接入已发送参考图视觉输入。前端限制每个 session 最多 3 张 reference image；生成工具按 `control_image` → `annotated_image` → `reference_images`（最多 3）→ `rag_image` → failed image 顺序构造 `input_image_urls`，并在 prompt 头部按图位写明每张图的职责。参考图传入 provider 后，`enhance_prompt` 不再注入完整视觉分析，只写 intent 使用规则（图片负责视觉细节，文字负责约束用法），避免重复传入信息。若 provider 多图输入失败，工具会降级重试一次，只保留 control/annotated 强约束图，弱参考回到文字规则。
@@ -1734,7 +1749,7 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
 - 2026-05-06：E-2 前先修会话管理基础问题：`/chat/new` 的客户端建会话逻辑增加一次性保护，避免 Next.js 开发模式下 effect 重跑导致重复创建 session；左侧 Sidebar 增加显式“新建对话”入口；后端新增 `DELETE /api/sessions/{id}`，级联删除 `messages`、`reference_images`、`generation_tasks`；前端历史会话列表增加删除按钮，删除当前会话后自动跳转到下一条会话或 `/chat/new`。该修复属于前端主链路基础能力，优先于 E-2 继续扩展。
 - 2026-05-06：E-1 后补充工作台布局交互：中栏与右栏之间增加桌面端拖拽分隔条，用户可直接用鼠标调整右侧工作区宽度；`workspaceStore` 新增 `workspaceWidth` / `workspaceCollapsed`，右栏支持像左侧 Sidebar 一样折叠，并保留窄恢复栏。该能力属于工作台壳层交互，先于 E-2 落地，避免后续在提示词/参考图工作区完成后再返工布局。
 - 2026-05-06：E-1 完成：前端新增 `components/chat/*`、`hooks/useSSE.ts`、`store/chatStore.ts`、`store/workspaceStore.ts`，落地左中右三栏骨架、纯文字多轮对话、SSE 文本/工具/生成事件消费，以及右侧 Prompt/生成图占位标签；`/chat/new` 改为客户端创建真实会话后跳转。为保证刷新和历史可用，后端 `session.py` 新增 `GET /api/sessions` 会话列表与 `GET /api/sessions/{id}` 消息历史返回，前端在进入会话时加载历史消息并渲染左侧历史列表。E-1 仍不包含参考图上传、prompt/参数持久化和批注下载，这些保留到 E-2 以后。
-- 2026-05-06：C-8 完成：`dashboard_service.py` 补齐 `embedding` 默认配置与 provider 列表，image provider 从残留 `openrouter` 改为 `grsai`，并增加 `__main__` 自检入口；`dashboard.py` 接受 `embedding` patch；`dashboard.yaml.example` 补齐 `embedding` 配置块并统一 `grsai` 命名；前端 `types.ts` 增加 `image_provider.model` 与 `embedding` 类型，Dashboard 新增 Embedding tab，图像生成平台配置增加 model 选择；`agent_graph.mmd` 改为当前 `agent -> rag_gate -> enhance_prompt -> generate_image -> evaluate_image -> refine_prompt` 的确定性子流程；`tests/services/test_dashboard_service.py` 更新为 `grsai`/`embedding` 并通过；前端 `npm run lint` 通过。
+- 2026-05-06：C-8 完成：`dashboard_service.py` 补齐 `embedding` 默认配置与 provider 列表，image provider 从残留 `openrouter` 改为 `grsai`，并增加 `__main__` 自检入口；`dashboard.py` 接受 `embedding` patch；`dashboard.yaml.example` 补齐 `embedding` 配置块并统一 `grsai` 命名；前端 `types.ts` 增加 `image_provider.model` 与 `embedding` 类型，Dashboard 新增 Embedding tab，图像生成平台配置增加 model 选择；`agent_graph.mmd` 改为当时的 `agent -> rag_gate -> enhance_prompt -> generate_image -> evaluate_image -> refine_prompt` 确定性子流程（2026-05-14 已更新为 `agent -> enhance_prompt -> rag_gate -> generate_image`）；`tests/services/test_dashboard_service.py` 更新为 `grsai`/`embedding` 并通过；前端 `npm run lint` 通过。
 - 2026-05-06：前端目标调整为图像生成三栏工作台：左侧 Sidebar（历史对话、知识库、首页跳转、Dashboard、折叠）、中间多轮对话与生成图缩略图、右侧 Workspace 标签页（提示词与参考图 / 生成图片）。参考图上传需支持用户标注参考意图（构图、色彩、建筑样式、材质、光线、环境、其他）；右侧展示并允许编辑 prompt、参数滑块和风格模板；生成图支持预览、下载、Canvas 批注，批注图首版作为新参考图进入下一轮。E 阶段拆分为 E-1 三栏骨架、E-2 参考图工作区、E-3 参数/风格/prompt 同步、E-4 生成图批注下载、E-5 全流程联调。
 - 2026-05-06：新增 `backend/scripts/test_chat_sse_flow.py` 独立联调脚本，连接真实 Docker Postgres/Redis，但使用 fake graph 避免真实 LLM/API 调用；覆盖消息去重、assistant 落库、Redis event buffer、`Last-Event-ID` 保守 replay、active run cancel 语义；在沙箱外运行 `.venv/bin/python scripts/test_chat_sse_flow.py` 通过。
 - 2026-05-08：为恢复前端主对话链路，`agent_node` 改为优先调用 `_llm.astream`，将模型原始输出直接经 `QueueEmitter` 作为 `text_delta` 推送给前端；节点结束后仍对完整输出做 JSON 解析并更新 `design_state`、`phase`、`ready_to_generate`。当前 assistant 展示内容是模型原文，不再在 `agent_node` 内提取 `reply` 字段生成聊天消息；后续如需“流式展示原文，结束后替换为 reply 字段”，需在 SSE/前端消息状态上增加一次完成后替换逻辑。

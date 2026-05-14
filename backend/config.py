@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "uploads"
     GENERATED_DIR: str = "generated"
     IMAGE_LIBRARY_DIR: str = str(_REPO_ROOT / "image-rag-mcp" / "library_images")
-    IMAGE_LIBRARY_STORAGE: str = "local"
+    IMAGE_LIBRARY_STORAGE: str = "minio"
     IMAGE_LIBRARY_MINIO_ENDPOINT: str = "http://localhost:9000"
     IMAGE_LIBRARY_MINIO_PUBLIC_ENDPOINT: str = "http://localhost:9000"
     IMAGE_LIBRARY_MINIO_ACCESS_KEY: str = "minioadmin"

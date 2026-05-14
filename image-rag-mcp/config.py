@@ -8,7 +8,7 @@ import yaml
 _DEFAULT_PG_DSN = "postgresql://postgres:postgres@localhost:5432/aigc_image_library"
 _DEFAULT_MILVUS_HOST = "localhost"
 _DEFAULT_MILVUS_PORT = "19530"
-_DEFAULT_IMAGE_LIBRARY_STORAGE = "local"
+_DEFAULT_IMAGE_LIBRARY_STORAGE = "minio"
 _DEFAULT_MINIO_ENDPOINT = "http://localhost:9000"
 _DEFAULT_MINIO_PUBLIC_ENDPOINT = "http://localhost:9000"
 _DEFAULT_MINIO_ACCESS_KEY = "minioadmin"

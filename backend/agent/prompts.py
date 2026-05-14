@@ -175,6 +175,35 @@ def ambience_rag_image_system() -> str:
 - 输出纯文本，不带任何 JSON 包裹或前缀"""
 
 
+def rag_search_query_system(design_state: DesignState) -> str:
+    ds = design_state
+    return f"""你是建筑效果图 RAG 检索文本改写助手。你的输出会直接用于文本向量检索，必须和图库入库时的图片 caption 标准保持一致。
+
+图库 caption 标准：
+- 2-3 句中文紧凑描述
+- 必须覆盖：建筑类型、风格、外立面材质、光线/氛围、视角、周边环境
+- 语言客观、具体、可检索
+- 不要 markdown、不要标题、不要换行、不要使用“这张图片”等冗余表达
+
+改写规则：
+- 只保留会影响图库相似召回的视觉语义
+- 删除负向提示词、质量词堆叠、摄影级/高质量/大师级/8K/不要水印等生成控制词
+- 不要写 provider、模型、JSON、参数或技术说明
+- 如果最终提示词缺少某些维度，可参考当前设计状态补全，但不要凭空新增与设计无关的信息
+
+当前设计状态：
+- 建筑类型: {ds.get('building_type') or '未填写'}
+- 风格: {ds.get('style') or '未填写'}
+- 外立面材质: {ds.get('facade_material') or '未填写'}
+- 光线: {ds.get('lighting') or '未填写'}
+- 视角: {ds.get('viewpoint') or '未填写'}
+- 周边环境: {ds.get('surroundings') or '未填写'}
+- 色彩倾向: {ds.get('color_palette') or '未填写'}
+- 特殊需求: {ds.get('special_requirements') or '无'}
+
+输出纯文本，只输出检索描述本身。"""
+
+
 def analyze_image_system() -> str:
     return """你是一位专业建筑师，请分析这张建筑参考图，提取以下信息并以 JSON 格式输出。
 
@@ -406,7 +435,7 @@ def evaluate_image_system(
 def refine_prompt_system(
     original_prompt: str,
     evaluation: EvaluationResult,
-    has_failed_image: bool = False,
+    has_previous_generation: bool = False,
     prompt_language: str = "zh",
 ) -> str:
     score = evaluation.get("score", 0)
@@ -430,14 +459,14 @@ def refine_prompt_system(
     fatal_issues = evaluation.get("fatal_issues") or []
     improvement_focus = evaluation.get("improvement_focus", "")
     image_section = ""
-    if has_failed_image:
+    if has_previous_generation:
         image_section = """
-## 失败图像
-用户消息中提供的第一张图是上一轮低分生成结果。你必须结合这张图判断问题：
-- 哪些内容已经正确，应该保留
-- 哪些内容与原始提示词或评估反馈不一致
-- 如果是图生图任务，重点检查体量、透视、窗户、构图是否被破坏
-- 修正 prompt 时要针对图中的具体失败点，不要只机械增加泛化质量词
+## 上一轮生成图像
+用户消息中提供的第一张图是上一轮生成结果。请结合这张图和评估反馈客观判断：
+- 哪些画面特征已经正确或可取，应该保留
+- 哪些内容与当前需求、原始提示词或评估反馈不一致，需要修改
+- 如果是图生图任务，重点检查体量、透视、窗户、构图是否符合当前要求
+- 不要默认否定整张图；修正 prompt 时针对具体偏差，不要只机械增加泛化质量词
 """
 
     return f"""你是一位专业的建筑效果图提示词工程师，请根据评估反馈修正提示词。

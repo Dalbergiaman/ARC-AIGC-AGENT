@@ -259,6 +259,7 @@ export function useSSE({
     eventSource.addEventListener("done", doneListener);
     eventSource.onerror = () => {
       if (doneReceived) return;
+      if (eventSource.readyState !== EventSource.CLOSED) return;
       handlersRef.current.onError?.("SSE_CONNECTION_ERROR", "流式连接已中断");
       eventSource.close();
     };

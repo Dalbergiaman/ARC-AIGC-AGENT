@@ -1,24 +1,34 @@
 flowchart TD
     START([用户消息进入]) --> AGENT[agent 节点\n理解意图、更新 DesignState]
 
-    AGENT -->|信息不足| REPLY[直接回复用户\n继续追问设计细节]
-    REPLY --> END_REPLY([本轮结束 · stop])
+    AGENT -->|显式发送图片| ANALYZE[analyze_reference_image\n分析参考图并合并 intent/note]
+    ANALYZE --> AGENT_LLM[LLM 回复 + prompt_draft 更新]
+    AGENT -->|无新图片| AGENT_LLM
 
-    AGENT -->|ready_to_generate = true| RAG_GATE[rag_gate 节点\n按规则判断是否检索相似案例]
-    AGENT -->|ready_to_generate = false| END_COLLECT([本轮结束 · stop])
+    AGENT_LLM -->|ready_to_generate = false| END_COLLECT([本轮结束 · stop])
 
-    RAG_GATE --> ENHANCE[enhance_prompt 节点\n构建正向/负向提示词]
-    ENHANCE --> GENERATE["generate_image 节点\n1. 提交 Celery 任务\n2. 轮询 Redis result backend\n3. 检查 cancel:{session_id}:{run_id}"]
+    AGENT_LLM -->|latest user 明确要求生成| ENHANCE[enhance_prompt 节点\n生成最终正向/负向提示词\n写 _enhanced_prompt]
+    ENHANCE --> RAG_GATE[rag_gate 节点\n基于 EnhancedPrompt 生成检索文本\n调用 MCP search_by_text]
+
+    RAG_GATE -->|RAG_BLOCKING_ENABLED=false\n或无候选| GENERATE["generate_image 节点\n1. 组装 control / annotated / reference / rag 图片槽位\n2. 提交 Celery 任务\n3. 轮询 Redis result backend\n4. 检查 cancel:{session_id}:{run_id}"]
+
+    RAG_GATE -->|RAG_BLOCKING_ENABLED=true\n且有候选| RAG_POPUP[推送 rag_candidates SSE\n前端候选浮窗]
+    RAG_POPUP -->|用户选中| RAG_PICK[下载候选图到 uploads\nVLM 生成 ambience_note\n写 AgentState.rag_image]
+    RAG_POPUP -->|跳过或超时| GENERATE
+    RAG_PICK --> GENERATE
 
     GENERATE -->|用户发来新消息\n旧 run 被置 cancel flag| INTERRUPTED[当前 run 中断]
     INTERRUPTED --> END_INTERRUPTED([本轮结束 · interrupted])
 
+    GENERATE -->|任务失败或超时| GEN_ERROR[generation_error SSE\n标记任务失败]
+    GEN_ERROR --> END_ERROR([本轮结束 · stop])
+
     GENERATE -->|生成成功| EVALUATE[evaluate_image 节点\nVLM 多维度打分]
-    EVALUATE -->|score < 0.8 且 retry_count < 3| REFINE[refine_prompt 节点\n根据评估结果修正提示词]
+    EVALUATE -->|fatal_issues 非空\n或 score < 0.72\n且 retry_count < 3| REFINE[refine_prompt 节点\n根据评估结果和上一轮图像修正提示词]
     REFINE --> GENERATE
 
-    EVALUATE -->|score >= 0.8\n或 retry_count == 3| RETURN_RESULT[返回 best_generation_result]
-    RETURN_RESULT --> END_RESULT([本轮结束 · stop / max_retries])
+    EVALUATE -->|score >= 0.72 且无 fatal_issues\n或 retry_count == 3| RETURN_RESULT[推送完整 generation_done\n保留 best_generation_result]
+    RETURN_RESULT --> END_RESULT([本轮结束 · stop])
 
     FRONTEND[前端图片卡片\n操作按钮区] -->|用户点击「存入图库」| STORE_API["POST /api/library/store\n独立 REST 接口"]
     STORE_API --> MCP[store_generated_image · MCP\n存 PostgreSQL + Milvus]

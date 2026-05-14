@@ -3,6 +3,7 @@
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
 
 import { GeneratedImagesTab } from "@/components/workspace/GeneratedImagesTab";
+import { ManualLibraryUploadTab } from "@/components/workspace/ManualLibraryUploadTab";
 import { PromptReferenceTab } from "@/components/workspace/PromptReferenceTab";
 import type { GenerationPreview, WorkspaceTab } from "@/lib/types";
 
@@ -91,6 +92,15 @@ export function WorkspacePanel({
             >
               生成图片
             </button>
+            <button
+              type="button"
+              onClick={() => onTabChange("libraryUpload")}
+              className={`rounded-md px-3 py-1.5 text-sm ${
+                activeTab === "libraryUpload" ? "bg-black/8 text-foreground" : "border border-black/8 bg-white"
+              }`}
+            >
+              上传图库
+            </button>
           </div>
           <button
             type="button"
@@ -111,8 +121,10 @@ export function WorkspacePanel({
               onSendControlImage={onSendControlImage}
               onSendReferenceImage={onSendReferenceImage}
             />
-          ) : (
+          ) : activeTab === "images" ? (
             <GeneratedImagesTab sessionId={sessionId} generationPreviews={generationPreviews} />
+          ) : (
+            <ManualLibraryUploadTab sessionId={sessionId} />
           )}
         </div>
       </aside>

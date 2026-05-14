@@ -94,6 +94,29 @@ export async function deleteUpload(fileId: string): Promise<void> {
   });
 }
 
+export type UploadImageResponse = {
+  file_id: string;
+  url: string;
+};
+
+export async function uploadImage(file: File): Promise<UploadImageResponse> {
+  const form = new FormData();
+  form.append("file", file);
+
+  const response = await fetch(`${getApiBaseUrl()}/api/upload`, {
+    method: "POST",
+    body: form,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Request failed: ${response.status}`);
+  }
+
+  return response.json() as Promise<UploadImageResponse>;
+}
+
 export type GalleryImage = {
   url: string;
   mtime: number;
@@ -111,8 +134,8 @@ export function storeImageToLibrary(payload: {
   negative_prompt?: string;
   provider?: string;
   design_state?: Record<string, unknown>;
-}): Promise<{ image_id: string }> {
-  return requestJson<{ image_id: string }>("/api/library/store", {
+}): Promise<{ image_id: string; caption?: string; image_url?: string }> {
+  return requestJson<{ image_id: string; caption?: string; image_url?: string }>("/api/library/store", {
     method: "POST",
     body: JSON.stringify(payload),
   });

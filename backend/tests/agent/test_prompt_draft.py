@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from agent.graph import _build_prompt_draft, _latest_human_text
+import asyncio
+
+from agent.graph import _build_prompt_draft, _latest_human_text, enhance_prompt_node, refine_prompt_node
+from agent.tools.prompt_builder import EnhancedPrompt
 
 
 def test_prompt_draft_contains_all_fields() -> None:
@@ -92,3 +95,48 @@ def test_latest_human_text_ignores_workspace_json_block() -> None:
 
     text = "继续调整立面\n[用户草稿 workspace: {\"custom_description\":\"abc\"}]"
     assert _latest_human_text([HumanMessage(content=text)]) == "继续调整立面"
+
+
+def test_enhance_prompt_node_stores_checkpoint_safe_dict(monkeypatch) -> None:
+    async def fake_enhance_prompt(**_kwargs):
+        return EnhancedPrompt(prompt="modern villa", negative_prompt="blurry")
+
+    monkeypatch.setattr("agent.graph.enhance_prompt", fake_enhance_prompt)
+    monkeypatch.setattr("agent.graph.get_current_emitter", lambda: None)
+
+    result = asyncio.run(enhance_prompt_node({
+        "design_state": {"building_type": "villa"},
+        "reference_images": [],
+        "workspace": {},
+        "messages": [],
+    }))
+
+    assert result["_enhanced_prompt"] == {
+        "prompt": "modern villa",
+        "negative_prompt": "blurry",
+    }
+    assert not isinstance(result["_enhanced_prompt"], EnhancedPrompt)
+
+
+def test_refine_prompt_node_stores_checkpoint_safe_dict(monkeypatch) -> None:
+    async def fake_refine_prompt(**_kwargs):
+        return EnhancedPrompt(prompt="refined villa", negative_prompt="watermark")
+
+    monkeypatch.setattr("agent.graph.refine_prompt", fake_refine_prompt)
+    monkeypatch.setattr("agent.graph.get_current_emitter", lambda: None)
+
+    result = asyncio.run(refine_prompt_node({
+        "design_state": {"building_type": "villa"},
+        "reference_images": [],
+        "workspace": {},
+        "_enhanced_prompt": {"prompt": "modern villa", "negative_prompt": "blurry"},
+        "last_evaluation": {"score": 0.5, "feedback": "needs work"},
+        "_current_gen_result": {"image_url": "/static/generated/out.png"},
+        "retry_count": 0,
+    }))
+
+    assert result["_enhanced_prompt"] == {
+        "prompt": "refined villa",
+        "negative_prompt": "watermark",
+    }
+    assert not isinstance(result["_enhanced_prompt"], EnhancedPrompt)

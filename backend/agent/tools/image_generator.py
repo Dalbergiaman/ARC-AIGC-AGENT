@@ -14,6 +14,7 @@ from celery.result import AsyncResult
 from agent.state import AgentState, GenerationResult
 from agent.tools.prompt_builder import EnhancedPrompt
 from celery_app import celery_app
+from core.image.dimensions import canvas_from_image_url
 from core.observability import observe, update_current_span
 
 
@@ -93,13 +94,9 @@ async def generate_image(
     annotated_image = state.get("annotated_image") or {}
     rag_image = state.get("rag_image") or {}
     reference_images = _reference_input_images(state)
-    current_gen_result = state.get("_current_gen_result") or {}
     control_url: str | None = control_image.get("image_url") if isinstance(control_image, dict) else None
     annotated_url: str | None = annotated_image.get("image_url") if isinstance(annotated_image, dict) else None
     rag_url: str | None = rag_image.get("image_url") if isinstance(rag_image, dict) else None
-    failed_url: str | None = (
-        current_gen_result.get("image_url") if isinstance(current_gen_result, dict) else None
-    )
 
     # Build prompt header explaining each image slot by its actual position
     prompt = enhanced_prompt.prompt
@@ -151,20 +148,19 @@ async def generate_image(
         else:
             line += "。"
         slot_labels.append(line)
-    if failed_url:
-        input_image_urls.append(failed_url)
-        slot_labels.append(
-            f"图{len(input_image_urls)}为上一轮低分生成结果，仅用于识别需要修正的问题；"
-            "不要复制其中错误内容。优先以图生图底图中的建筑要素和用户最新要求为准。"
-        )
     if slot_labels:
         prompt = "\n".join([*slot_labels, prompt])
 
+    canvas_source_url = control_url or annotated_url
+    canvas = canvas_from_image_url(canvas_source_url)
     request_dict = {
         "prompt": prompt,
         "negative_prompt": enhanced_prompt.negative_prompt,
         "control_image_url": control_url,
         "input_image_urls": input_image_urls,
+        "width": canvas.width,
+        "height": canvas.height,
+        "aspectRatio": canvas.aspect_ratio,
         # Backward compatibility for providers or tasks still reading the old field.
         "ref_image_url": control_url,
     }
@@ -184,9 +180,17 @@ async def generate_image(
             "annotated_image_url": annotated_url,
             "reference_image_urls": [image.get("image_url") for image in reference_images],
             "rag_image_url": rag_url,
-            "failed_image_url": failed_url,
             "input_image_count": len(input_image_urls),
             "semantic_reference_image_count": len(state.get("reference_images") or []),
+            "canvas": {
+                "width": canvas.width,
+                "height": canvas.height,
+                "aspect_ratio": canvas.aspect_ratio,
+                "source_width": canvas.source_width,
+                "source_height": canvas.source_height,
+                "source_url": canvas.source_url,
+                "used_default": canvas.used_default,
+            },
             "session_id": session_id,
             "run_id": run_id,
         }

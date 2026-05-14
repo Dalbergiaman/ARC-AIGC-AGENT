@@ -4,7 +4,15 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent.tools.prompt_builder import EnhancedPrompt, enhance_prompt, refine_prompt, resolve_prompt_language
+from agent.tools.prompt_builder import (
+    EnhancedPrompt,
+    build_rag_search_query,
+    clean_rag_search_query,
+    enhance_prompt,
+    fallback_rag_search_query,
+    refine_prompt,
+    resolve_prompt_language,
+)
 
 
 def test_resolve_prompt_language_defaults_to_chinese_except_nano_banana() -> None:
@@ -14,8 +22,63 @@ def test_resolve_prompt_language_defaults_to_chinese_except_nano_banana() -> Non
     assert resolve_prompt_language("nano-banana-pro") == "en"
 
 
+def test_clean_rag_search_query_strips_markdown_and_newlines() -> None:
+    raw = """```text
+现代住宅建筑，米白真石漆外立面，黄昏暖光氛围。
+人视角街景构图，周边为安静庭院。
+```"""
+
+    assert clean_rag_search_query(raw) == (
+        "现代住宅建筑，米白真石漆外立面，黄昏暖光氛围。 人视角街景构图，周边为安静庭院。"
+    )
+
+
+def test_fallback_rag_search_query_uses_original_core_fields() -> None:
+    assert fallback_rag_search_query({
+        "building_type": "别墅",
+        "style": "现代主义",
+        "facade_material": "玻璃幕墙",
+    }) == "别墅 现代主义 玻璃幕墙"
+
+
 @pytest.mark.anyio
-async def test_refine_prompt_passes_failed_image_to_llm() -> None:
+async def test_build_rag_search_query_matches_caption_style_and_disables_thinking() -> None:
+    captured: dict = {}
+
+    async def fake_ainvoke(messages, images=None, enable_thinking=True):
+        captured["system"] = messages[0].content
+        captured["human"] = messages[1].content
+        captured["enable_thinking"] = enable_thinking
+        return "现代别墅建筑，玻璃幕墙外立面，黄昏暖光氛围。人视角街景构图，周边为安静庭院。"
+
+    with patch("agent.tools.prompt_builder._llm.ainvoke", AsyncMock(side_effect=fake_ainvoke)):
+        query = await build_rag_search_query(
+            enhanced_prompt=EnhancedPrompt(
+                prompt="现代别墅，玻璃幕墙，黄昏暖光，高质量建筑效果图",
+                negative_prompt="模糊，水印",
+            ),
+            design_state={"building_type": "别墅", "style": "现代", "facade_material": "玻璃幕墙"},
+        )
+
+    assert query == "现代别墅建筑，玻璃幕墙外立面，黄昏暖光氛围。人视角街景构图，周边为安静庭院。"
+    assert captured["enable_thinking"] is False
+    assert "图库 caption 标准" in captured["system"]
+    assert "负向提示词" in captured["human"]
+
+
+@pytest.mark.anyio
+async def test_build_rag_search_query_falls_back_when_llm_fails() -> None:
+    with patch("agent.tools.prompt_builder._llm.ainvoke", AsyncMock(side_effect=RuntimeError("boom"))):
+        query = await build_rag_search_query(
+            enhanced_prompt=EnhancedPrompt(prompt="ignored", negative_prompt="ignored"),
+            design_state={"building_type": "办公楼", "style": "极简主义", "facade_material": "金属板"},
+        )
+
+    assert query == "办公楼 极简主义 金属板"
+
+
+@pytest.mark.anyio
+async def test_refine_prompt_passes_previous_generation_to_llm() -> None:
     captured: dict = {}
 
     async def fake_ainvoke(messages, images=None):
@@ -45,13 +108,16 @@ async def test_refine_prompt_passes_failed_image_to_llm() -> None:
                 "improvement_focus": "先修正建筑透视",
                 "feedback": "材质没有按要求替换",
             },
-            failed_image_url="/static/generated/failed.png",
+            previous_generation_url="/static/generated/previous.png",
         )
 
     assert result.prompt == "fixed prompt"
-    to_data_url.assert_called_once_with("/static/generated/failed.png")
+    to_data_url.assert_called_once_with("/static/generated/previous.png")
     assert captured["images"] == ["data:image/png;base64,abc"]
-    assert "失败图像" in captured["messages"][0].content
+    assert "上一轮生成图像" in captured["messages"][0].content
+    assert "不要默认否定整张图" in captured["messages"][0].content
+    assert "失败图像" not in captured["messages"][0].content
+    assert "低分生成结果" not in captured["messages"][0].content
     assert "修正后的中文正向提示词" in captured["messages"][0].content
 
 

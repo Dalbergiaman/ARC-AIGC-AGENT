@@ -1,6 +1,6 @@
 from langchain_core.messages import AIMessage, HumanMessage
 
-from agent.graph import has_explicit_generation_intent, resolve_generation_gate, route_after_evaluate
+from agent.graph import build_graph, has_explicit_generation_intent, resolve_generation_gate, route_after_agent, route_after_evaluate
 
 
 def test_generation_intent_requires_latest_user_message() -> None:
@@ -67,6 +67,14 @@ def test_generation_gate_allows_generation_with_explicit_intent() -> None:
 
     assert ready is True
     assert phase == "generating"
+
+
+def test_route_after_agent_builds_prompt_before_rag_gate() -> None:
+    assert route_after_agent({"ready_to_generate": True}) == "enhance_prompt"
+
+
+def test_graph_compiles_with_enhance_prompt_conditional_route() -> None:
+    build_graph().compile()
 
 
 def test_route_after_evaluate_does_not_retry_marginal_score_without_fatal_issue() -> None:

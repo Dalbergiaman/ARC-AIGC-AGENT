@@ -24,7 +24,14 @@ from agent.tools.image_generator import NullEmitter, generate_image
 from api.routes.library import RAG_PICK_KEY, RAG_PICK_SKIP_VALUE
 from config import settings
 from core.llm.streaming import get_current_emitter
-from agent.tools.prompt_builder import EnhancedPrompt, enhance_prompt, refine_prompt, resolve_prompt_language
+from agent.tools.prompt_builder import (
+    EnhancedPrompt,
+    build_rag_search_query,
+    enhance_prompt,
+    fallback_rag_search_query,
+    refine_prompt,
+    resolve_prompt_language,
+)
 from core.llm.client import LLMClient
 from core.observability import message_preview, observe, update_current_span
 from services import dashboard_service, library_service
@@ -245,6 +252,17 @@ def resolve_generation_gate(llm_phase: str, explicit_generation_intent: bool) ->
     if llm_phase == "generating":
         return False, "collecting"
     return False, llm_phase
+
+
+def _coerce_enhanced_prompt(value: object) -> EnhancedPrompt | None:
+    if isinstance(value, EnhancedPrompt):
+        return value
+    if isinstance(value, dict):
+        try:
+            return EnhancedPrompt(**value)
+        except Exception:
+            return None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -475,11 +493,16 @@ async def rag_gate_node(state: AgentState) -> dict:
         )
         return {}
 
-    query = " ".join(filter(None, [
-        building_type,
-        style,
-        design_state.get("facade_material", ""),
-    ]))
+    enhanced_prompt = _coerce_enhanced_prompt(state.get("_enhanced_prompt"))
+    if enhanced_prompt is not None:
+        query = await build_rag_search_query(
+            enhanced_prompt=enhanced_prompt,
+            design_state=design_state,
+        )
+    else:
+        query = fallback_rag_search_query(design_state)
+    if not query:
+        query = fallback_rag_search_query(design_state)
     filters = {k: v for k, v in {"building_type": building_type, "style": style}.items() if v}
 
     try:
@@ -692,7 +715,7 @@ async def enhance_prompt_node(state: AgentState) -> dict:
     )
     return {
         "phase": "generating",
-        "_enhanced_prompt": enhanced,  # passed to generate_image_node via state
+        "_enhanced_prompt": enhanced.model_dump(),  # checkpoint-safe dict
         "workspace": workspace,
     }
 
@@ -700,7 +723,7 @@ async def enhance_prompt_node(state: AgentState) -> dict:
 @observe(name="node:generate_image")
 async def generate_image_node(state: AgentState) -> dict:
     """Submit Celery task and poll for result."""
-    enhanced_prompt: EnhancedPrompt | None = state.get("_enhanced_prompt")
+    enhanced_prompt = _coerce_enhanced_prompt(state.get("_enhanced_prompt"))
     if enhanced_prompt is None:
         # Fallback: build a minimal prompt from design_state
         design_state = dict(state.get("design_state") or {})
@@ -840,10 +863,10 @@ async def evaluate_image_node(state: AgentState) -> dict:
 @observe(name="node:refine_prompt")
 async def refine_prompt_node(state: AgentState) -> dict:
     """Refine the prompt based on evaluation feedback."""
-    enhanced_prompt: EnhancedPrompt | None = state.get("_enhanced_prompt")
+    enhanced_prompt = _coerce_enhanced_prompt(state.get("_enhanced_prompt"))
     evaluation: EvaluationResult | None = state.get("last_evaluation")
     gen_result = state.get("_current_gen_result") or {}
-    failed_image_url = gen_result.get("image_url") if isinstance(gen_result, dict) else None
+    previous_generation_url = gen_result.get("image_url") if isinstance(gen_result, dict) else None
     image_model = str(dashboard_service.get_config().get("image_provider", {}).get("model", "") or "")
     prompt_language = resolve_prompt_language(image_model)
 
@@ -855,7 +878,7 @@ async def refine_prompt_node(state: AgentState) -> dict:
         input={
             "original_prompt": enhanced_prompt.model_dump(),
             "evaluation": evaluation,
-            "failed_image_url": failed_image_url,
+            "previous_generation_url": previous_generation_url,
             "prompt_language": prompt_language,
             "image_model": image_model,
             "retry_count": state.get("retry_count", 0),
@@ -864,7 +887,7 @@ async def refine_prompt_node(state: AgentState) -> dict:
     refined = await refine_prompt(
         original_prompt=enhanced_prompt,
         evaluation=evaluation,
-        failed_image_url=failed_image_url,
+        previous_generation_url=previous_generation_url,
         prompt_language=prompt_language,
     )
     workspace = _build_prompt_draft(
@@ -885,7 +908,7 @@ async def refine_prompt_node(state: AgentState) -> dict:
 
     update_current_span(output=refined.model_dump())
     return {
-        "_enhanced_prompt": refined,
+        "_enhanced_prompt": refined.model_dump(),
         "retry_count": state.get("retry_count", 0) + 1,
         "workspace": workspace,
     }
@@ -895,9 +918,9 @@ async def refine_prompt_node(state: AgentState) -> dict:
 # Routing
 # ---------------------------------------------------------------------------
 
-def route_after_agent(state: AgentState) -> Literal["rag_gate", END]:  # type: ignore[valid-type]
+def route_after_agent(state: AgentState) -> Literal["enhance_prompt", END]:  # type: ignore[valid-type]
     if state.get("ready_to_generate"):
-        return "rag_gate"
+        return "enhance_prompt"
     return END
 
 
@@ -930,8 +953,8 @@ def build_graph() -> StateGraph:
     g.add_edge(START, "agent")
     g.add_conditional_edges("agent", route_after_agent)
 
-    g.add_edge("rag_gate", "enhance_prompt")
-    g.add_edge("enhance_prompt", "generate_image")
+    g.add_edge("enhance_prompt", "rag_gate")
+    g.add_edge("rag_gate", "generate_image")
     g.add_edge("generate_image", "evaluate_image")
     g.add_conditional_edges("evaluate_image", route_after_evaluate)
 

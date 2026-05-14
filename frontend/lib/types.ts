@@ -162,7 +162,7 @@ export type SSEEventPayloadMap = {
 
 export type SSEEventType = keyof SSEEventPayloadMap;
 
-export type WorkspaceTab = "prompt" | "images";
+export type WorkspaceTab = "prompt" | "images" | "libraryUpload";
 
 export type ReferenceIntent =
   | "composition"

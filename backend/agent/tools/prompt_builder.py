@@ -10,7 +10,7 @@ import json
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ValidationError
 
-from agent.prompts import enhance_prompt_system, refine_prompt_system
+from agent.prompts import enhance_prompt_system, rag_search_query_system, refine_prompt_system
 from agent.state import AnnotatedImage, ControlImage, DesignState, EvaluationResult, ReferenceImageAnalysis
 from agent.tools.image_analysis import _to_data_url
 from core.llm.client import LLMClient
@@ -22,6 +22,27 @@ _llm = LLMClient()
 class EnhancedPrompt(BaseModel):
     prompt: str
     negative_prompt: str
+
+
+def clean_rag_search_query(raw: str, max_chars: int = 260) -> str:
+    """Normalize LLM output into a single compact retrieval query."""
+    text = raw.strip()
+    if text.startswith("```"):
+        parts = text.split("```")
+        text = parts[1] if len(parts) > 1 else text
+        if text.lstrip().startswith("text"):
+            text = text.lstrip()[4:]
+    text = " ".join(line.strip() for line in text.splitlines() if line.strip())
+    text = text.strip("`# -*\t\n\r")
+    return text[:max_chars].strip()
+
+
+def fallback_rag_search_query(design_state: DesignState) -> str:
+    return " ".join(filter(None, [
+        str(design_state.get("building_type", "") or ""),
+        str(design_state.get("style", "") or ""),
+        str(design_state.get("facade_material", "") or ""),
+    ])).strip()
 
 
 def resolve_prompt_language(image_model: str | None = None) -> str:
@@ -126,28 +147,72 @@ async def enhance_prompt(
             return fallback
 
 
+@observe(name="tool:build_rag_search_query", as_type="generation")
+async def build_rag_search_query(
+    enhanced_prompt: EnhancedPrompt,
+    design_state: DesignState,
+) -> str:
+    """Rewrite the final image prompt into a caption-style RAG retrieval query."""
+    fallback = fallback_rag_search_query(design_state)
+    messages = [
+        SystemMessage(content=rag_search_query_system(design_state=design_state)),
+        HumanMessage(content=(
+            "请把下面最终生图提示词改写成图库检索专用文本。\n"
+            f"正向提示词：{enhanced_prompt.prompt}\n"
+            f"负向提示词：{enhanced_prompt.negative_prompt}"
+        )),
+    ]
+
+    try:
+        raw = await _llm.ainvoke(messages, enable_thinking=False)
+        query = clean_rag_search_query(raw)
+    except Exception as exc:
+        update_current_generation(
+            input={"prompt": message_preview(enhanced_prompt.prompt), "design_state": design_state},
+            output={"query": fallback, "error": str(exc), "fallback": True},
+            level="WARNING",
+            status_message=f"rag search query generation failed: {exc}",
+        )
+        return fallback
+
+    if not query:
+        update_current_generation(
+            input={"prompt": message_preview(enhanced_prompt.prompt), "design_state": design_state},
+            output={"query": fallback, "empty_output": True, "fallback": True},
+            level="WARNING",
+            status_message="rag search query generation returned empty output",
+        )
+        return fallback
+
+    update_current_generation(
+        input={"prompt": message_preview(enhanced_prompt.prompt), "design_state": design_state},
+        output={"query": query, "fallback": False},
+    )
+    return query
+
+
 @observe(name="tool:refine_prompt", as_type="generation")
 async def refine_prompt(
     original_prompt: EnhancedPrompt,
     evaluation: EvaluationResult,
-    failed_image_url: str | None = None,
+    previous_generation_url: str | None = None,
     prompt_language: str = "zh",
 ) -> EnhancedPrompt:
-    """Refine prompt based on evaluation feedback and the failed image.
+    """Refine prompt based on evaluation feedback and the previous generation.
 
     Called by refine_prompt_node when automatic retry policy decides the image needs repair.
     """
-    images = [_to_data_url(failed_image_url)] if failed_image_url else None
+    images = [_to_data_url(previous_generation_url)] if previous_generation_url else None
     messages = [
         SystemMessage(content=refine_prompt_system(
             original_prompt=original_prompt.prompt,
             evaluation=evaluation,
-            has_failed_image=bool(failed_image_url),
+            has_previous_generation=bool(previous_generation_url),
             prompt_language=prompt_language,
         )),
         HumanMessage(content=(
-            "请根据评估反馈和失败图像修正提示词。第一张图是刚才低分的生成结果。"
-            if failed_image_url
+            "请根据评估反馈和上一轮生成图像修正提示词。第一张图是上一轮生成结果。"
+            if previous_generation_url
             else "请根据评估反馈修正提示词。"
         )),
     ]
@@ -157,8 +222,8 @@ async def refine_prompt(
         input={
             "original_prompt": original_prompt.model_dump(),
             "evaluation": evaluation,
-            "failed_image_url": failed_image_url,
-            "has_failed_image": bool(failed_image_url),
+            "previous_generation_url": previous_generation_url,
+            "has_previous_generation": bool(previous_generation_url),
             "prompt_language": prompt_language,
         },
         output=message_preview(raw),
