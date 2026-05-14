@@ -999,13 +999,13 @@ raise TimeoutError("generation timeout")
 }
 ```
 
-Agent 收到显式发送的图片后将其写入本轮 `input_state`：`control_image` 存入 `AgentState.control_image`，生成节点将其写入 `GenerationRequest.control_image_url`；`reference_images` 的 `url`、`intent`、`note` 存入 `AgentState.reference_images`，并调用 `analyze_reference_image(image_url=url)` 进行结构化视觉分析。主对话 `agent_node` 同时通过本轮临时 `_current_vision_images` 把显式发送的图片传给 VLM，让模型必须针对图片类别回复：control image 分析底图可优化方向；reference image 按用户 intent 分析如何参考，未指定时做全图简要分析。
+Agent 收到显式发送的图片后将其写入本轮 `input_state`：`control_image` 存入 `AgentState.control_image`，生成节点将其写入 `GenerationRequest.control_image_url`；`annotated_image` 存入 `AgentState.annotated_image`，作为下一轮图生图修改指令图；`reference_images` 的 `url`、`intent`、`note` 存入 `AgentState.reference_images`，并调用 `analyze_reference_image(image_url=url)` 进行结构化视觉分析。主对话 `agent_node` 同时通过本轮临时 `_current_vision_images` 把显式发送的图片传给 VLM，让模型必须针对图片类别回复：control image 分析底图可优化方向；reference image 按用户 intent 分析如何参考，未指定时做全图简要分析。
 
 参考图原有结构化分析流程继续保留，但 `enhance_prompt` 只按用户标注 intent 写入使用规则，避免把主对话分析和生成 prompt 语义重复放大。图生图请求的图片顺序固定为：`control_image` → `annotated_image` → 已发送 `reference_images`（最多 3 张）→ `rag_image`。上一轮生成图只允许在 `refine_prompt` 阶段作为 VLM 视觉诊断输入，不进入 provider 图生图输入。`control_image` 不进入 `reference_images`，也不参与参考相似度评估；它在生成输入中始终是最高优先级结构约束。
 
 如果 provider 多图输入失败，生成工具会降级重试一次：只保留 `control_image` / `annotated_image` 这类强约束图，reference/rag 弱参考回到文字规则，避免整轮直接失败。
 
-当前实现状态：`POST /api/upload` 返回 `{file_id, url}`；`POST /api/chat/sessions/{session_id}/messages` 已支持 `control_image` / `reference_images` / `workspace` payload，并同步更新 Agent 状态。`sessions.workspace_state` 是结构化 prompt 草稿的服务端主存储；已发送参考图写入 PostgreSQL `reference_images.analysis`，其中保存 VLM 分析、用户 `intent/note`、`reference_intent/intent_note`、发送状态等；前端 `localStorage` 只作为未同步草稿和同浏览器 UI 恢复兜底。`control_image` 当前仍按 sessionId 存前端草稿，只有点击发送底图时才随该轮消息提交给 Agent。前端限制每个 session 最多保留 3 张参考图，删除旧图后才能继续上传。
+当前实现状态：`POST /api/upload` 返回 `{file_id, url}`；`POST /api/chat/sessions/{session_id}/messages` 已支持 `control_image` / `annotated_image` / `reference_images` / `workspace` payload，并同步更新 Agent 状态。`sessions.workspace_state` 是结构化 prompt 草稿、`rag_image`、已发送批注图等工作区状态的服务端主存储；已发送参考图写入 PostgreSQL `reference_images.analysis`，其中保存 VLM 分析、用户 `intent/note`、`reference_intent/intent_note`、发送状态等；前端 `localStorage` 只作为未同步草稿和同浏览器 UI 恢复兜底。`control_image` 当前仍按 sessionId 存前端草稿，只有点击发送底图时才随该轮消息提交给 Agent；`annotated_image` 由生成图标签页的"发送"按钮显式提交并持久化到 `workspace_state.annotated_image`。前端限制每个 session 最多保留 3 张参考图，删除旧图后才能继续上传。
 
 注意：早期参考图记录可能只含 `analysis.intent` / `analysis.note`，分析完成后的记录会补充 `reference_intent` / `intent_note`。前端恢复历史会话时应兼容两组字段，避免旧记录或未完成分析的记录恢复为默认参考意图。
 
@@ -1197,7 +1197,7 @@ docker exec -it aigc_agent-postgres-1 psql -U postgres -c "CREATE DATABASE aigc_
 
 1. `enhance_prompt_node` 调用 `enhance_prompt` 生成最终用于生图的 `EnhancedPrompt`。
 2. `rag_gate_node` 基于 `EnhancedPrompt.prompt` 调用 LLM 生成图库检索专用文本；该文本必须贴近入库 caption 标准：2-3 句中文，覆盖建筑类型、风格、外立面材质、光线/氛围、视角、周边环境，去掉负向词、质量词和 provider 指令。若生成失败，回退到旧逻辑（`building_type` / `style` / `facade_material` 拼接）。
-3. `rag_gate_node` 调用 MCP `search_by_text`（query 使用上述检索专用文本，标量过滤仍用 `building_type` / `style` 非空值），拿到候选列表。
+3. `rag_gate_node` 调用 MCP `search_by_text`（query 使用上述检索专用文本；当前只做向量检索，不传 `building_type` / `style` 标量过滤；结构化 metadata 完整入库前不启用过滤，避免候选被空 metadata 误杀），拿到候选列表。
 4. 通过 `QueueEmitter` 推送 `rag_candidates` SSE 事件，前端在中栏对话渲染候选浮窗。
 5. 节点开始 Redis 长轮询：1s 一次，最多 600s（`RAG_BLOCKING_TIMEOUT=600`）。轮询同时检查：
    - **pick key** `rag_pick:{session_id}:{run_id}`：用户在浮窗点了候选或「跳过」，由 `POST /api/library/pick` 写入。值为 `image_id`（选中）或 sentinel（跳过，如空字符串或 `null`）。
@@ -1673,9 +1673,14 @@ DASHBOARD_YAML_PATH        ../backend/config/dashboard.yaml   # VLM / embedding 
 11. C-7：Langfuse 可观测性集成；如联调排障需要，可提前执行。
 
 **最近决策记录**：
+- 2026-05-14：批注图改为显式发送后参与图生图。前端在生成图标签页的"当前批注图"卡片增加发送按钮，点击后通过现有 `annotated_image` payload 提交本轮消息；后端将其写入 `AgentState.annotated_image` 并持久化到 `sessions.workspace_state.annotated_image`。普通文本消息不自动携带批注图，避免未确认批注误进入生成。生成工具继续按 `control_image` → `annotated_image` → 已发送 `reference_images` → `rag_image` 构造 provider 输入图。
+- 2026-05-14：修正 RAG 候选浮窗图片 URL 解析。`RagCandidatesPopup` 之前无条件把 `getApiBaseUrl()` 拼到候选 `image_url` 前，只适用于 `/static/library/...` 相对路径；图库存储默认 MinIO 后，Milvus 返回完整 `http://localhost:9000/image-library/...` URL，继续拼接会变成非法地址并显示破图。现改为仅相对路径拼后端 API base，完整 URL 原样使用。
+- 2026-05-14：RAG gate 暂停使用 `building_type` / `style` 标量过滤，只基于 caption 风格 query 做向量检索。原因是当前生成图和手动上传入库路径尚未稳定写入结构化 metadata，继续传精确过滤会导致 Milvus 中 metadata 为空的候选被全部过滤，表现为 rag_gate 已执行但从不弹候选浮窗。后续等入库 metadata 质量稳定后，再重新评估是否恢复结构化过滤或改为 hybrid rerank。
+- 2026-05-14：把高质量建筑图生图提示词样例抽象进 `enhance_prompt_system()`。新增“图生图建筑摄影提示词结构”，要求图生图 prompt 先声明照片级/商业级可视化编辑任务，再锁定原图视角、构图、主体比例、体量关系、空间关系、立面节奏和主要场地关系，随后具体化玻璃/混凝土/金属/木材/石材等材质物理属性、统一光照天气、克制环境配景和明确色调后期。负向提示补充主体建筑被重构、原图视角改变、立面节奏错乱、玻璃死白、水面/地面反射脏乱等图生图常见失败项。该改动只增强提示词生成规则，不改变 Agent 状态、图像生成接口或评估流程。
+- 2026-05-14：修正 RAG gate 触发条件漂移。`rag_gate_node` 不再要求 `building_type` 或 `style` 非空才执行检索；当前 RAG 检索以 `_enhanced_prompt.prompt` 改写出的 caption 风格 query 为主，只有 query 生成失败且旧字段 fallback 也为空时才跳过。`building_type` / `style` 标量过滤已暂停，避免结构化 metadata 缺失时永远不弹 RAG 候选。
 - 2026-05-14：图生图输出尺寸改为按底图比例自动规范化。后端新增 `core/image/dimensions.py`，使用 Pillow 读取本地 `/static/uploads` / `/static/generated` 图片宽高，不使用 VLM 或 OpenCV。生成请求按 `control_image` 优先、无 control 时用 `annotated_image`、都没有则默认 `16:9`；`reference_images` 和 `rag_image` 不决定画布。输出不使用底图原始小尺寸，而是按长边 2048 等比规范化并取 64 像素倍数，写入 `GenerationRequest.width/height/aspectRatio`：百炼/火山使用宽高，GrsAI 使用比例并保持 `imageSize=2k`。
 - 2026-05-14：自动重试不再把上一轮生成图作为 provider 图生图输入。`generate_image()` 删除 `_current_gen_result.image_url` 注入 `input_image_urls` 的逻辑，图像输入顺序固定为 control / annotated / reference_images / rag，避免下一轮被上一轮画面锚定、难以大改。`refine_prompt()` 仍可把上一轮生成图发给 VLM 做视觉诊断，但内部命名和提示词从“失败图/低分图”改为“上一轮生成图像/上一轮生成结果”，要求客观判断哪些保留、哪些修改，不默认否定整张图。
-- 2026-05-14：RAG 检索改为基于最终生图提示词生成 caption 风格检索文本。生成链路从 `agent -> rag_gate -> enhance_prompt -> generate_image` 调整为 `agent -> enhance_prompt -> rag_gate -> generate_image`；`rag_gate_node` 优先读取 `_enhanced_prompt.prompt`，调用 `build_rag_search_query()` 生成 2-3 句中文图库检索专用文本，标准与入库 VLM caption 对齐（建筑类型、风格、外立面材质、光线/氛围、视角、周边环境），并去掉负向词、质量词、provider 指令等噪音。LLM query 生成失败或为空时回退旧字段拼接，`building_type` / `style` 标量过滤暂保持不变，避免召回行为一次性放宽过多。
+- 2026-05-14：RAG 检索改为基于最终生图提示词生成 caption 风格检索文本。生成链路从 `agent -> rag_gate -> enhance_prompt -> generate_image` 调整为 `agent -> enhance_prompt -> rag_gate -> generate_image`；`rag_gate_node` 优先读取 `_enhanced_prompt.prompt`，调用 `build_rag_search_query()` 生成 2-3 句中文图库检索专用文本，标准与入库 VLM caption 对齐（建筑类型、风格、外立面材质、光线/氛围、视角、周边环境），并去掉负向词、质量词、provider 指令等噪音。LLM query 生成失败或为空时回退旧字段拼接；当前已暂停 `building_type` / `style` 标量过滤，只做向量召回。
 - 2026-05-14：右侧工作区新增“上传图库”标签，用于手动把本地图片写入 RAG 图库。前端新增 `ManualLibraryUploadTab`，流程复用现有 `/api/upload` 保存源图，再调用 `POST /api/library/store` 入库；payload 固定 `prompt="手动上传图库图片"`、`provider="manual_upload"`，不新增备注输入框、不经过 Agent。入库后的最终 `image_url` 仍由 image-rag-mcp 按 `IMAGE_LIBRARY_STORAGE` 决定，当前默认写 MinIO 公开地址。
 - 2026-05-14：图库 RAG 存储默认切换为 MinIO。`backend/config.py` 的 `IMAGE_LIBRARY_STORAGE` 默认值和 `image-rag-mcp/config.py` 的 `_DEFAULT_IMAGE_LIBRARY_STORAGE` 均改为 `minio`；后续通过 `POST /api/library/store` 入库的图片仍先保存 `library_images/{image_id}.{ext}` 本地副本用于 VLM / embedding / `search_by_image`，随后发布到业务 MinIO bucket（默认 `image-library`），PG/Milvus 的 `image_url` 默认写 `IMAGE_LIBRARY_MINIO_PUBLIC_ENDPOINT/bucket/key`。如需回退 `/static/library/{id}.{ext}`，必须显式设置 `IMAGE_LIBRARY_STORAGE=local`。该调整不改变通用业务上传：`STORAGE` 仍默认 `local`，`backend/services/storage_service.py` 的 `STORAGE=minio` 分支仍未实现。
 - 2026-05-13：优化 `enhance_prompt_system()` 的建筑效果图品质护栏，减少泛化质量词堆叠，改为更可执行的画面控制规则。新的提示词强调“克制、干净、主体清晰、信息有秩序”，要求玻璃通透且反射受控、环境元素少而准、前景车辆/人物/植被/水面只辅助尺度和氛围，并在负向提示中明确排除杂乱前景、随机车辆、车辆喧宾夺主、脏玻璃反射、碎片化反光、植被噪声、水面脏乱反射、学生作业感等问题。`enhance_prompt` 生成 prompt 时要求先压缩再融合上下文，避免把多来源信息机械堆进提示词。

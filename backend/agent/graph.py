@@ -473,15 +473,6 @@ async def rag_gate_node(state: AgentState) -> dict:
         (treated as skip), or cancel flag (raises CancelledError).
     """
     design_state = dict(state.get("design_state") or {})
-    building_type = design_state.get("building_type", "")
-    style = design_state.get("style", "")
-
-    if not (building_type or style):
-        update_current_span(
-            input={"design_state": design_state},
-            output={"searched": False, "reason": "building_type and style both empty"},
-        )
-        return {}
 
     client = get_mcp_client()
     if client is None:
@@ -503,18 +494,22 @@ async def rag_gate_node(state: AgentState) -> dict:
         query = fallback_rag_search_query(design_state)
     if not query:
         query = fallback_rag_search_query(design_state)
-    filters = {k: v for k, v in {"building_type": building_type, "style": style}.items() if v}
-
+    if not query:
+        update_current_span(
+            input={"design_state": design_state},
+            output={"searched": False, "reason": "rag query empty"},
+        )
+        return {}
     try:
         results = await library_service.search_by_text(
             client,
             query=query,
             top_k=5,
-            filters=filters or None,
+            filters=None,
         )
     except Exception as exc:
         update_current_span(
-            input={"query": query, "filters": filters},
+            input={"query": query, "filters": None},
             output={"searched": False, "error": str(exc)},
             level="WARNING",
             status_message=f"RAG search failed: {exc}",
@@ -523,8 +518,12 @@ async def rag_gate_node(state: AgentState) -> dict:
 
     candidates = list(results or [])
     update_current_span(
-        input={"query": query, "filters": filters},
-        output={"searched": True, "candidate_count": len(candidates)},
+        input={"query": query, "filters": None},
+        output={
+            "searched": True,
+            "candidate_count": len(candidates),
+            "blocking_enabled": settings.RAG_BLOCKING_ENABLED,
+        },
     )
 
     if not candidates or not settings.RAG_BLOCKING_ENABLED:

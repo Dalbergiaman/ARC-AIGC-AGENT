@@ -103,11 +103,14 @@ export function ChatWorkspace({ sessionId }: Props) {
     setSessionPromptDraft,
     setSessionReferenceImages,
     updateControlImage,
+    getAnnotatedImage,
+    updateAnnotatedImage,
     updateReferenceImage,
     setRagImage,
   } = useWorkspaceStore();
 
   const controlImage = getControlImage(sessionId);
+  const annotatedImage = getAnnotatedImage(sessionId);
   const referenceImages = getReferenceImages(sessionId);
 
   useEffect(() => {
@@ -178,6 +181,7 @@ export function ChatWorkspace({ sessionId }: Props) {
               fileId: ws.annotated_image.file_id,
               url: ws.annotated_image.url,
               note: ws.annotated_image.note ?? "",
+              sent: Boolean(ws.annotated_image.sent),
             });
           }
         } else {
@@ -469,6 +473,29 @@ export function ChatWorkspace({ sessionId }: Props) {
     );
   }
 
+  async function handleSendAnnotatedImage() {
+    if (!annotatedImage || annotatedImage.uploading || annotatedImage.error || !annotatedImage.url || annotatedImage.sent) {
+      return;
+    }
+    const note = annotatedImage.note?.trim();
+    const content = note
+      ? `我发送了一张批注图。批注说明：${note}。请按这张批注图修改上一版效果图。`
+      : "我发送了一张批注图，请按这张批注图修改上一版效果图。";
+    await submitPayload(
+      content,
+      {
+        content,
+        annotated_image: {
+          file_id: annotatedImage.fileId,
+          url: annotatedImage.url,
+          note: annotatedImage.note ?? "",
+        },
+        workspace: workspacePayload(),
+      },
+      () => updateAnnotatedImage(sessionId, { sent: true }),
+    );
+  }
+
   const handleWorkspaceResizeStart = useCallback(() => {
     setIsResizingWorkspace(true);
   }, []);
@@ -506,6 +533,7 @@ export function ChatWorkspace({ sessionId }: Props) {
       onToggle={toggleWorkspace}
       onResizeStart={handleWorkspaceResizeStart}
       onSendControlImage={handleSendControlImage}
+      onSendAnnotatedImage={handleSendAnnotatedImage}
       onSendReferenceImage={handleSendReferenceImage}
     />
   );

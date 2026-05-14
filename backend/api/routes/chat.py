@@ -35,7 +35,14 @@ from models.database import get_session, async_session as _db_session_factory
 from models.schemas import GenerationTask
 from services.message_service import add_message, get_messages
 from services.session_service import get_session as get_db_session
-from services.session_service import create_generation_task, update_workspace_state, update_prompt_draft, update_rag_image_state, upsert_reference_images
+from services.session_service import (
+    create_generation_task,
+    update_annotated_image_state,
+    update_prompt_draft,
+    update_rag_image_state,
+    update_workspace_state,
+    upsert_reference_images,
+)
 from services.session_title_service import maybe_generate_session_title
 
 router = APIRouter(prefix="/api/chat")
@@ -165,6 +172,13 @@ async def submit_message(
         if body.annotated_image is not None:
             annotated_key = f"annotated_image:{session_id}:{stream_id}"
             await r.set(annotated_key, json.dumps(body.annotated_image.model_dump()), ex=_RUN_TTL)
+            annotated_workspace_state = body.annotated_image.model_dump()
+            annotated_workspace_state["sent"] = True
+            await update_annotated_image_state(
+                db,
+                session_id,
+                annotated_workspace_state,
+            )
         if body.workspace and any(
             [
                 body.workspace.keywords,

@@ -19,6 +19,7 @@ type Props = {
   onToggle: () => void;
   onResizeStart: () => void;
   onSendControlImage: () => void;
+  onSendAnnotatedImage: () => void;
   onSendReferenceImage: (fileId: string) => void;
 };
 
@@ -34,6 +35,7 @@ export function WorkspacePanel({
   onToggle,
   onResizeStart,
   onSendControlImage,
+  onSendAnnotatedImage,
   onSendReferenceImage,
 }: Props) {
   if (collapsed) {
@@ -122,7 +124,12 @@ export function WorkspacePanel({
               onSendReferenceImage={onSendReferenceImage}
             />
           ) : activeTab === "images" ? (
-            <GeneratedImagesTab sessionId={sessionId} generationPreviews={generationPreviews} />
+            <GeneratedImagesTab
+              sessionId={sessionId}
+              generationPreviews={generationPreviews}
+              streamBusy={streamBusy}
+              onSendAnnotatedImage={onSendAnnotatedImage}
+            />
           ) : (
             <ManualLibraryUploadTab sessionId={sessionId} />
           )}

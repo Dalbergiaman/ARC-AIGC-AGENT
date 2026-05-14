@@ -71,6 +71,50 @@ class TestSessionService(unittest.IsolatedAsyncioTestCase):
         db.commit.assert_awaited_once()
         db.refresh.assert_awaited_once_with(session)
 
+    async def test_update_annotated_image_state_preserves_layered_workspace(self):
+        session = SimpleNamespace(
+            id=uuid.uuid4(),
+            workspace_state={"prompt_draft": {"llm_description": "modern villa"}},
+        )
+        db = SimpleNamespace(commit=AsyncMock(), refresh=AsyncMock())
+        annotated_image = {
+            "file_id": "anno-1",
+            "url": "/static/uploads/anno.png",
+            "note": "入口换材质",
+            "sent": True,
+        }
+
+        with patch.object(session_service, "get_session", AsyncMock(return_value=session)) as mocked_get:
+            updated = await session_service.update_annotated_image_state(
+                db,
+                session.id,
+                annotated_image,
+            )
+
+        self.assertIs(updated, session)
+        self.assertEqual(session.workspace_state["prompt_draft"], {"llm_description": "modern villa"})
+        self.assertEqual(session.workspace_state["annotated_image"], annotated_image)
+        mocked_get.assert_awaited_once_with(db, session.id)
+        db.commit.assert_awaited_once()
+        db.refresh.assert_awaited_once_with(session)
+
+    async def test_update_annotated_image_state_wraps_legacy_prompt_draft(self):
+        session = SimpleNamespace(
+            id=uuid.uuid4(),
+            workspace_state={"keywords": {}, "llm_description": "legacy"},
+        )
+        db = SimpleNamespace(commit=AsyncMock(), refresh=AsyncMock())
+
+        with patch.object(session_service, "get_session", AsyncMock(return_value=session)):
+            await session_service.update_annotated_image_state(
+                db,
+                session.id,
+                {"file_id": "anno-1", "url": "/static/uploads/anno.png", "note": ""},
+            )
+
+        self.assertEqual(session.workspace_state["prompt_draft"]["llm_description"], "legacy")
+        self.assertEqual(session.workspace_state["annotated_image"]["file_id"], "anno-1")
+
     async def test_list_reference_images_returns_query_result(self):
         item = SimpleNamespace(id=uuid.uuid4())
         scalar_result = SimpleNamespace(all=lambda: [item])

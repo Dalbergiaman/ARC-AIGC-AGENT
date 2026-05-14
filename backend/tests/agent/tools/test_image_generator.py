@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 from PIL import Image
 
-from agent.tools.image_generator import generate_image
+from agent.tools.image_generator import _IMAGE_QUALITY_SUFFIX, generate_image
 from agent.tools.prompt_builder import EnhancedPrompt
 from config import settings
 
@@ -73,6 +73,7 @@ class TestImageGeneratorTool(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["aspectRatio"], "16:9")
         self.assertIn("图2为参考图：只参考材质肌理", captured["prompt"])
         self.assertIn("图3为参考图：只参考色彩关系", captured["prompt"])
+        self.assertIn(_IMAGE_QUALITY_SUFFIX, captured["prompt"])
 
     async def test_generate_image_references_do_not_promote_to_control(self) -> None:
         task = SimpleNamespace(id="task-1")
@@ -123,6 +124,7 @@ class TestImageGeneratorTool(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["height"], 1152)
         self.assertEqual(captured["aspectRatio"], "16:9")
         self.assertIn("图1为参考图：只参考光线时段", captured["prompt"])
+        self.assertTrue(captured["prompt"].endswith(_IMAGE_QUALITY_SUFFIX))
 
     async def test_generate_image_uses_control_image_ratio_for_canvas(self) -> None:
         task = SimpleNamespace(id="task-1")
@@ -295,6 +297,7 @@ class TestImageGeneratorTool(unittest.IsolatedAsyncioTestCase):
         self.assertIn("允许重绘相关区域", captured["prompt"])
         self.assertIn("批注说明：加深入口雨棚", captured["prompt"])
         self.assertIn("图3为参考图：只参考建筑表达语言", captured["prompt"])
+        self.assertLess(captured["prompt"].index("modern villa"), captured["prompt"].index(_IMAGE_QUALITY_SUFFIX))
 
     async def test_generate_image_limits_reference_inputs_to_three(self) -> None:
         task = SimpleNamespace(id="task-1")
@@ -591,3 +594,5 @@ class TestImageGeneratorTool(unittest.IsolatedAsyncioTestCase):
             "https://example.com/control.png",
             "https://example.com/annotated.png",
         ])
+        self.assertIn(_IMAGE_QUALITY_SUFFIX, captured[0]["prompt"])
+        self.assertIn(_IMAGE_QUALITY_SUFFIX, captured[1]["prompt"])

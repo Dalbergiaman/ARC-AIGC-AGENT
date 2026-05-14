@@ -32,6 +32,17 @@ class NullEmitter:
 _POLL_INTERVAL = 2      # seconds between Redis result checks
 _TIMEOUT_SECONDS = 240  # max wait before treating as timeout
 _MAX_REFERENCE_INPUT_IMAGES = 3
+_IMAGE_QUALITY_SUFFIX = (
+    "图片质量要求：真实顶级照片级建筑可视化、渲染效果，建筑比例稳定，透视准确，结构清晰，"
+    "边缘细节自然，画面完成度高，避免模型图感、塑料感、廉价渲染感和学生作业感。"
+)
+
+
+def _append_quality_suffix(prompt: str) -> str:
+    prompt = prompt.strip()
+    if _IMAGE_QUALITY_SUFFIX in prompt:
+        return prompt
+    return f"{prompt}\n{_IMAGE_QUALITY_SUFFIX}" if prompt else _IMAGE_QUALITY_SUFFIX
 
 
 def _reference_usage_rule(image: dict) -> str:
@@ -99,7 +110,7 @@ async def generate_image(
     rag_url: str | None = rag_image.get("image_url") if isinstance(rag_image, dict) else None
 
     # Build prompt header explaining each image slot by its actual position
-    prompt = enhanced_prompt.prompt
+    prompt = _append_quality_suffix(enhanced_prompt.prompt)
     input_image_urls: list[str] = []
     slot_labels: list[str] = []
     fallback_input_image_urls: list[str] = []
@@ -164,7 +175,7 @@ async def generate_image(
         # Backward compatibility for providers or tasks still reading the old field.
         "ref_image_url": control_url,
     }
-    fallback_prompt = enhanced_prompt.prompt
+    fallback_prompt = _append_quality_suffix(enhanced_prompt.prompt)
     if fallback_slot_labels:
         fallback_prompt = "\n".join([*fallback_slot_labels, fallback_prompt])
     fallback_request_dict = {

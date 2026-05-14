@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { BookMarked, Download, ImageIcon, Loader2, Pencil, Save, X } from "lucide-react";
+import { BookMarked, Download, ImageIcon, Loader2, Pencil, Send, Save, X } from "lucide-react";
 
 import { ImageAnnotationCanvas } from "@/components/workspace/ImageAnnotationCanvas";
 import { deleteUpload, getApiBaseUrl, storeImageToLibrary } from "@/lib/api";
@@ -12,6 +12,8 @@ import { useWorkspaceStore } from "@/store/workspaceStore";
 type Props = {
   sessionId: string;
   generationPreviews: GenerationPreview[];
+  streamBusy: boolean;
+  onSendAnnotatedImage: () => void;
 };
 
 function resolveImageUrl(url: string): string {
@@ -24,7 +26,12 @@ function getBestTaskId(previews: GenerationPreview[]): string | null {
   return scored.reduce((best, p) => (p.score! > best.score! ? p : best)).taskId;
 }
 
-export function GeneratedImagesTab({ sessionId, generationPreviews }: Props) {
+export function GeneratedImagesTab({
+  sessionId,
+  generationPreviews,
+  streamBusy,
+  onSendAnnotatedImage,
+}: Props) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [annotatingUrl, setAnnotatingUrl] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -39,6 +46,14 @@ export function GeneratedImagesTab({ sessionId, generationPreviews }: Props) {
     removeAnnotatedImage,
   } = useWorkspaceStore();
   const annotatedImage = getAnnotatedImage(sessionId);
+  const canSendAnnotatedImage = Boolean(
+    annotatedImage &&
+    !annotatedImage.uploading &&
+    !annotatedImage.error &&
+    annotatedImage.url &&
+    !annotatedImage.sent &&
+    !streamBusy,
+  );
 
   async function handleDownload(item: GenerationPreview) {
     if (!item.imageUrl) return;
@@ -103,7 +118,19 @@ export function GeneratedImagesTab({ sessionId, generationPreviews }: Props) {
             )}
           </div>
           <div className="min-w-0 flex-1">
-            <div className="mb-2 text-xs font-medium">当前批注图</div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="text-xs font-medium">当前批注图</div>
+              <button
+                type="button"
+                disabled={!canSendAnnotatedImage}
+                onClick={onSendAnnotatedImage}
+                className="inline-flex items-center gap-1 rounded-md border border-black/8 px-2 py-1 text-[11px] text-muted-foreground hover:bg-black/[0.04] disabled:opacity-40"
+                title={annotatedImage.sent ? "已发送" : "发送批注图"}
+              >
+                <Send className="size-3" />
+                {annotatedImage.sent ? "已发送" : "发送"}
+              </button>
+            </div>
             <textarea
               value={annotatedImage.note ?? ""}
               placeholder="批注说明（可选）"

@@ -19,6 +19,10 @@ type Props = {
   onClose: () => void;
 };
 
+function resolveImageUrl(url: string): string {
+  return url.startsWith("/") ? `${getApiBaseUrl()}${url}` : url;
+}
+
 export function RagCandidatesPopup({ candidates, timeout, sessionId, runId, onClose }: Props) {
   const [secondsLeft, setSecondsLeft] = useState(timeout);
   const [picking, setPicking] = useState(false);
@@ -79,7 +83,7 @@ export function RagCandidatesPopup({ candidates, timeout, sessionId, runId, onCl
             className="group relative flex-shrink-0 overflow-hidden rounded-lg border-2 border-transparent transition hover:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
           >
             <img
-              src={`${getApiBaseUrl()}${c.image_url}`}
+              src={resolveImageUrl(c.image_url)}
               alt={c.caption ?? "候选图"}
               className="h-32 w-32 object-cover"
             />

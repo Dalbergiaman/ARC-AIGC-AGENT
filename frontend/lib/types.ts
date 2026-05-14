@@ -65,7 +65,7 @@ export type WorkspaceState = {
   prompt_draft?: PromptDraft | null;
   rag_image?: RagImageState | null;
   control_image?: { file_id: string; url: string; note?: string } | null;
-  annotated_image?: { file_id: string; url: string; note?: string } | null;
+  annotated_image?: { file_id: string; url: string; note?: string; sent?: boolean } | null;
 };
 
 export type SessionResponse = {

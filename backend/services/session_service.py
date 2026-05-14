@@ -112,6 +112,27 @@ async def update_rag_image_state(
     return session
 
 
+async def update_annotated_image_state(
+    db: AsyncSession, session_id: uuid.UUID, annotated_image: dict | None
+) -> Session | None:
+    """Persist the annotated_image sub-key in workspace_state."""
+    session = await get_session(db, session_id)
+    if session is None:
+        return None
+
+    existing = dict(session.workspace_state) if isinstance(session.workspace_state, dict) else {}
+    if "keywords" in existing and "prompt_draft" not in existing:
+        existing = {"prompt_draft": existing}
+    if annotated_image is None:
+        existing.pop("annotated_image", None)
+    else:
+        existing["annotated_image"] = annotated_image
+    session.workspace_state = existing
+    await db.commit()
+    await db.refresh(session)
+    return session
+
+
 async def upsert_reference_images(
     db: AsyncSession,
     session_id: uuid.UUID,
